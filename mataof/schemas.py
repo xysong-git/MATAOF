@@ -247,3 +247,52 @@ HISTORICAL_RECORD_CONTRACT = {
     },
     "execution_feedback": {"latency_ms": 12.3, "rows_scanned": 450},         # 必填：执行反馈
 }
+
+
+# ---------------------------------------------------------------------------
+# Execution Monitoring Agent 输出模板
+# ---------------------------------------------------------------------------
+
+def execution_monitoring_output_template() -> dict:
+    """返回 Execution Monitoring Agent 输出模板的全新深拷贝。
+
+    字段语义、扩展字段与判断规则见 docs/execution-monitoring-agent.md。
+    所有指标只来自真实执行环境/监控接口；无法获得 → null，绝不估计。
+    """
+    return {
+        "query_id": "",
+        "strategy_id": "",
+        "execution_status": "unknown",     # success | timeout | failed | cancelled | unknown
+        "failure_reason": None,            # failed 时的原因（原始记录）；无 → null
+        "metrics": {
+            "response_time_ms": None,
+            "p50_latency_ms": None,
+            "p95_latency_ms": None,
+            "p99_latency_ms": None,
+            "throughput": None,
+            "cpu_utilization": None,       # 归一化为 0~1 小数
+            "memory_utilization": None,    # 归一化为 0~1 小数
+            "io_throughput": None,
+        },
+        "baseline_comparison": {
+            "available": False,
+            "latency_change_percent": None,     # 负值 = 延迟降低（更快）
+            "p95_change_percent": None,
+            "p99_change_percent": None,
+            "throughput_change_percent": None,  # 正值 = 吞吐提升
+            "cpu_change_percent": None,
+            "memory_change_percent": None,
+            "io_change_percent": None,          # 扩展：规格任务要求、基础模板未覆盖
+        },
+        "performance_change": [],          # 扩展：方向标签，如 ["latency_reduction", "cpu_increase"]
+        "performance_assessment": "insufficient_evidence",
+        # improved | degraded | unchanged | failed | insufficient_evidence
+        "anomalies": [],
+        "feedback": {
+            "strategy_effective": None,    # true=improved / false=degraded,failed / null=其余
+            "confidence": 0.0,
+            "assessment_basis": [],        # 扩展：判断依据（可追踪的实测事实）
+            "scope": "single_execution",   # 扩展：单次执行观察，不代表策略永久有效
+        },
+        "notes": [],                       # 扩展：数据缺失/无效等可追踪说明
+    }

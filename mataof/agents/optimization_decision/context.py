@@ -25,6 +25,7 @@ from mataof.agents.optimization_decision.catalog import (
     catalog_strategy,
     dimension_of_strategy,
 )
+from mataof.similarity import compact_features as _compact_features
 
 
 @dataclass
@@ -82,34 +83,8 @@ class DecisionContext:
 
 
 def compact_features(analysis: dict) -> dict:
-    """把分析输出压缩为历史记录契约中的 query_features 摘要（相似度计算用）。"""
-    f = analysis.get("query_features") or {}
-    t = f.get("time") or {}
-    d = f.get("device") or {}
-    fl = f.get("filter") or {}
-    agg = f.get("aggregation") or {}
-    counts = fl.get("type_counts") or {}
-    return {
-        "query_type": analysis.get("query_type") or "unknown",
-        "time": {
-            "has_time_filter": bool(t.get("has_time_filter")),
-            "time_span": t.get("time_span"),
-            "range_level": t.get("range_level") or "unknown",
-        },
-        "device": {
-            "device_count": d.get("device_count"),
-            "multi_device": d.get("multi_device"),
-        },
-        "filter": {
-            "non_time_filter_count": sum(v for k, v in counts.items() if k != "time"),
-        },
-        "aggregation": {
-            "has_aggregation": bool(agg.get("has_aggregation")),
-            "has_group_by": bool(agg.get("has_group_by")),
-            "has_window": bool(agg.get("has_window")),
-            "functions": sorted({r.get("function") for r in agg.get("aggregation_functions") or []}),
-        },
-    }
+    """把分析输出压缩为历史记录契约中的 query_features 摘要（共享实现，口径一致）。"""
+    return _compact_features(analysis)
 
 
 def _normalize_candidates(raw: Any, notes: list) -> dict[str, list[str]]:

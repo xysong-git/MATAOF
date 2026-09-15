@@ -54,6 +54,38 @@
 
 详细规格见 [docs/optimization-decision-agent.md](docs/optimization-decision-agent.md)。
 
+### 3. Execution Monitoring Agent（执行监控智能体）
+
+`mataof/agents/execution_monitoring/`
+
+监控查询的真实执行情况，采集运行指标（响应时间、P50/P95/P99、吞吐、CPU/内存/IO），
+建立 Query + Selected Strategy + Actual Execution Result 的关联，生成结构化执行反馈。
+
+- **事实采集 Agent**：只回答"实际执行发生了什么"，不回答"下一步该用什么策略"
+- 所有指标必须来自真实执行环境/监控接口；无法获得 → null/unknown，绝不虚构
+- baseline 比较（无 baseline 不生成比较结果）+ performance_change 方向标签
+- 策略效果判断（improved / degraded / unchanged / failed / insufficient_evidence，
+  基于实测；单次执行不推断永久有效）
+- 异常识别（超时/失败/延迟飙升/资源异常/偏离历史表现）——只记录，不改策略
+
+详细规格见 [docs/execution-monitoring-agent.md](docs/execution-monitoring-agent.md)。
+
+### 4. Knowledge Memory Agent（知识记忆智能体）
+
+`mataof/agents/knowledge_memory/`
+
+历史查询、查询特征、优化策略、数据库状态、系统状态与实际执行结果的
+结构化存储、检索、关联与更新，为 Optimization Decision Agent 提供历史决策依据。
+
+- **append-only 存储**：不修改、不删除历史记录（原子写 JSON 持久化）
+- 每次完整执行装配为一条记录（Query + Features + Context + Strategy + Execution + Timestamp）
+- 检索：Strong/Moderate/Weak 三层匹配（与决策 Agent 共用同一套多维相似度口径，
+  非 SQL 文本匹配）；成功策略模式提取（≥3 次且成功率 ≥0.6）；失败经验保留汇总
+- 反馈更新：成功/失败经验标记、累计策略评价、priority change（单次异常不否定历史）
+- 检索结果可直接作为决策 Agent 的 `historical_records` 输入（端到端已验证）
+
+详细规格见 [docs/knowledge-memory-agent.md](docs/knowledge-memory-agent.md)。
+
 ## 快速开始
 
 ```bash
@@ -70,7 +102,9 @@ print(json.dumps(r, ensure_ascii=False, indent=2))
 
 # 示例
 python3 examples/analyze_example.py      # Query Analysis Agent
-python3 examples/decide_example.py       # 分析 → 决策完整流水线
+python3 examples/decide_example.py       # 分析 → 决策流水线
+python3 examples/monitor_example.py      # 分析 → 决策 → 执行 → 监控反馈流水线
+python3 examples/knowledge_example.py    # 四 Agent 完整闭环（经验积累 → 检索复用）
 
 # 测试
 python3 -m pytest tests/ -v
@@ -103,16 +137,43 @@ MATAOF/
 │           ├── similarity.py         # 历史记录相似度与加权（证据而非规则）
 │           ├── scoring.py            # 候选评分 + 风险门控 + 维度内选择
 │           └── confidence.py         # 维度/整体置信度公式
-├── tests/                            # 63 例单元测试 + 真实 IoTDB 语料鲁棒性验证
+│       └── execution_monitoring/
+│           ├── agent.py              # 编排：采集 → 比较 → 判断 → 异常 → 反馈
+│           ├── normalize.py          # 指标校验与归一化（事实采集，不虚构）
+│           ├── comparison.py         # baseline 比较 + performance_change 标签
+│           ├── assessment.py         # 策略效果判断（单次执行不夸大）
+│           └── anomalies.py          # 异常识别（只记录，不改策略）
+│       └── knowledge_memory/
+│           ├── agent.py              # 编排：检索 / 反馈更新 / 全库统计
+│           ├── store.py              # append-only JSON 持久化存储
+│           ├── record.py             # 历史记录装配（三 Agent 输出关联）
+│           └── retrieval.py          # 三层匹配检索 + 成功/失败模式汇总
+├── similarity.py                     # 共享相似度口径（KM 检索与决策证据共用）
+├── tests/                            # 106 例单元测试 + 真实 IoTDB 语料鲁棒性验证
 ├── examples/
 │   ├── analyze_example.py
-│   └── decide_example.py
+│   ├── decide_example.py
+│   ├── monitor_example.py
+│   └── knowledge_example.py
 └── docs/
     ├── query-analysis-agent.md       # Query Analysis Agent 规格说明
-    └── optimization-decision-agent.md # Optimization Decision Agent 规格说明
+    ├── optimization-decision-agent.md # Optimization Decision Agent 规格说明
+    ├── execution-monitoring-agent.md  # Execution Monitoring Agent 规格说明
+    └── knowledge-memory-agent.md      # Knowledge Memory Agent 规格说明
 ```
 
-## 规划中的组件
+## 系统闭环
 
-- Knowledge Memory Agent：历史执行经验的存储、相似查询检索与反馈学习（后续开发）
-- 执行反馈与在线修正回路（后续开发）
+```
+Query ──► Query Analysis ──► Optimization Decision ──► 执行层
+            (特征提取)          (策略选择)               │
+                                  ▲                     ▼
+                                  │          Execution Monitoring
+                                  │            (事实采集)
+                                  │                     │
+                                  └── Knowledge Memory ◄┘
+                                       (经验存储/检索)
+```
+
+在线修正回路：监控反馈 → 知识入库 → 相似查询检索 → 作为决策证据（历史是证据而非
+规则）→ 影响后续选择。
