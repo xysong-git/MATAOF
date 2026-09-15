@@ -192,3 +192,58 @@ def query_analysis_output_template() -> dict:
         "analysis_confidence": 0.0,
         "schema_version": "1.0",            # 扩展：输出 schema 版本（实验对齐）
     }
+
+
+# ---------------------------------------------------------------------------
+# Optimization Decision Agent 输出模板与历史记录契约
+# ---------------------------------------------------------------------------
+
+def optimization_decision_output_template() -> dict:
+    """返回 Optimization Decision Agent 输出模板的全新深拷贝。
+
+    字段语义、决策状态枚举与置信度公式见 docs/optimization-decision-agent.md。
+    """
+    return {
+        "query_id": "",
+        "decision": {
+            "time_pruning": {"strategy": "", "reason": "", "confidence": 0.0},
+            "filter_order": {"strategy": "", "reason": "", "confidence": 0.0},
+            "aggregation_placement": {"strategy": "", "reason": "", "confidence": 0.0},
+        },
+        "selected_strategy": {"strategy_id": "", "strategy_parameters": {}},
+        "evidence": {
+            "query_features": [],            # 实际用于决策的特征条目（字符串）
+            "database_state": [],            # 实际用于决策的数据库状态条目
+            "system_state": [],              # 实际用于决策的系统状态条目
+            "historical_records": [],        # 使用的历史记录 [{record_id, similarity, used_for}]
+        },
+        "overall_confidence": 0.0,
+        "fallback_strategy": "",             # 触发回退时给出回退到的策略组合
+        "decision_status": "invalid_input",  # success | partial_fallback | fallback | invalid_input
+        "notes": [],                         # 扩展：排除候选、记录过滤等可追踪说明
+    }
+
+
+# Knowledge Memory Agent 历史记录契约（Optimization Decision Agent 的输入之一）。
+# 历史记录属于"证据"而非"规则"：只有与当前上下文（查询特征/数据库状态/系统状态）
+# 相似度达到阈值的历史记录才参与决策，且按其相似度加权。
+HISTORICAL_RECORD_CONTRACT = {
+    "record_id": "",                          # 历史记录唯一标识（必填）
+    "record_time": 1700000000000,             # 可选：记录产生时间（epoch 毫秒），用于时效衰减
+    "query_features": {                       # 必填：查询特征摘要（compact 形式）
+        "query_type": "range_query",
+        "time": {"has_time_filter": True, "time_span": 25000, "range_level": "narrow"},
+        "device": {"device_count": 1, "multi_device": False},
+        "filter": {"non_time_filter_count": 1},
+        "aggregation": {"has_aggregation": False, "has_group_by": False,
+                        "has_window": False, "functions": []},
+    },
+    "database_state": {"data_scale_level": "small", "device_scale": 100},   # 可选
+    "system_state": {"load_level": "low"},                                    # 可选
+    "strategy": {                               # 必填：该记录实际使用的策略
+        "time_pruning": "full_scan",
+        "filter_order": "time_first",
+        "aggregation_placement": "not_applicable",
+    },
+    "execution_feedback": {"latency_ms": 12.3, "rows_scanned": 450},         # 必填：执行反馈
+}

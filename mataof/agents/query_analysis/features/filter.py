@@ -23,9 +23,8 @@ from mataof.agents.query_analysis.features.base import (
     condition_operator,
     condition_value,
     decompose_where,
-    first_column,
-    full_ref,
     is_time_column,
+    reference_of_leaf,
     select_blocks,
 )
 
@@ -52,12 +51,11 @@ def _classify(leaf: exp.Expression, select_names: set[str]) -> str:
         return "subquery"
     if isinstance(leaf, exp.In) and isinstance(leaf.args.get("query"), exp.Subquery):
         return "subquery"
-    col = first_column(leaf)
-    if col is None:
+    ref = reference_of_leaf(leaf)
+    if ref is None:
         return "tag_or_attribute"  # 无法识别列 → 保守标记，记录原因由调用方处理
-    if is_time_column(col):
+    if ref.lower() in {"time", "timestamp"}:
         return "time"
-    ref = full_ref(col)
     if "." in ref:
         return "value"          # 完整路径引用（root.sg.d.s）→ 测点值条件
     if ref in select_names:
@@ -73,9 +71,9 @@ def _record_condition(leaf: exp.Expression, ctype: str, notes: list[str]) -> dic
         "operator": condition_operator(leaf),
         "value": condition_value(leaf),
     }
-    col = first_column(leaf)
-    if col is not None:
-        record["column"] = full_ref(col)
+    ref = reference_of_leaf(leaf)
+    if ref is not None:
+        record["column"] = ref
     else:
         notes.append(f"过滤条件无法识别列引用：{record['expression']}（标记为 tag_or_attribute，原因：无法确定列）")
     return record

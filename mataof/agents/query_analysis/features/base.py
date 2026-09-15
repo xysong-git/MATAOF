@@ -31,6 +31,31 @@ def full_ref(e: exp.Expression) -> str:
     return ".".join(p for p in parts if p)
 
 
+def full_reference(expr: Optional[exp.Expression]) -> Optional[str]:
+    """重建任意引用表达式的完整路径。
+
+    多段路径引用在 sqlglot 中可能被解析为 Dot(this=Column(设备路径),
+    expression=Identifier(测点名)) 链，需要沿链还原；裸列/单段引用直接返回。
+    """
+    if expr is None:
+        return None
+    if isinstance(expr, exp.Dot):
+        base = full_reference(expr.this)
+        tail = expr.args.get("expression")
+        tail_text = _ident_text(tail) if tail is not None else None
+        if base and tail_text:
+            return f"{base}.{tail_text}"
+        return None
+    if isinstance(expr, exp.Column):
+        return full_ref(expr)
+    return None
+
+
+def reference_of_leaf(leaf: exp.Expression) -> Optional[str]:
+    """返回谓词叶子左操作数的完整引用路径（列/测点引用）。"""
+    return full_reference(getattr(leaf, "this", None))
+
+
 def is_time_column(c: exp.Column) -> bool:
     return bool(c.name) and c.name.lower() in TIME_COLUMN_NAMES
 
