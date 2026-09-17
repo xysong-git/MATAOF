@@ -1,0 +1,2 @@
+[console_scripts]
+mataof = mataof.cli:main

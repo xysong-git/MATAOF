@@ -97,12 +97,14 @@ class OptimizationDecisionAgent:
                     "strategy": NOT_APPLICABLE,
                     "reason": r.not_applicable_reason or "维度不适用",
                     "confidence": 0.0,
+                    "equivalent_sql": None,
                 }
             elif r.is_fallback:
                 output["decision"][dim] = {
                     "strategy": r.fallback_strategy or "",
                     "reason": _fallback_reason(dim, r, ctx),
                     "confidence": dim_conf[dim],
+                    "equivalent_sql": None,
                 }
             else:
                 chosen = r.chosen
@@ -110,6 +112,7 @@ class OptimizationDecisionAgent:
                     "strategy": chosen.name,
                     "reason": _selection_reason(dim, r, ctx),
                     "confidence": dim_conf[dim],
+                    "equivalent_sql": chosen.equivalent_sql,
                 }
 
         # ---- selected_strategy 与 fallback_strategy ----
@@ -127,6 +130,7 @@ class OptimizationDecisionAgent:
         params = _strategy_parameters(results, ctx)
         output["selected_strategy"]["strategy_id"] = "|".join(parts)
         output["selected_strategy"]["strategy_parameters"] = params
+        output["selected_strategy"]["equivalent_sql"] = _compose_equivalent_sql(ctx, results)
         output["fallback_strategy"] = "|".join(fallback_parts)
 
         # ---- evidence ----
@@ -205,7 +209,7 @@ def _selection_reason(dim: str, r: DimensionResult, ctx: DecisionContext) -> str
 
 
 def _strategy_parameters(results: dict, ctx: DecisionContext) -> dict:
-    """传递给执行层的参数：只包含事实性取值。"""
+    """传递给执行层的参数：只包含事实性取值 + 候选提供的执行级参数。"""
     params: dict = {}
     r = results["time_pruning"]
     if r.applicable and not r.is_fallback and r.chosen.name in (
@@ -216,7 +220,36 @@ def _strategy_parameters(results: dict, ctx: DecisionContext) -> dict:
             "start_time": t.get("start_time"),
             "end_time": t.get("end_time"),
         }
+    # 候选携带的执行级参数（候选提供方给出，原样透传）
+    for dim in DIMENSIONS:
+        r = results[dim]
+        if r.applicable and not r.is_fallback and r.chosen.parameters:
+            entry = dict(params.get(dim) or {})
+            entry.update(r.chosen.parameters)
+            params[dim] = entry
     return params
+
+
+def _compose_equivalent_sql(ctx: DecisionContext, results: dict) -> Optional[str]:
+    """组合可直接执行的等价 SQL（混合模型）。
+
+    组合规则（保守、确定性）：
+    - 0 个维度提供非平凡等价 SQL → 原查询文本（策略为执行级参数，SQL 不变）；
+    - 恰好 1 个维度提供 → 该 SQL（候选按维度独立生成，典型为 Filter Order 重排）；
+    - ≥2 个维度提供 → null（无法可靠组合独立生成的 SQL），执行层按 strategy_id
+      与各维度参数执行，绝不输出可能错误的 SQL。
+    """
+    sqls = []
+    for dim in DIMENSIONS:
+        r = results[dim]
+        if r.applicable and not r.is_fallback and r.chosen.equivalent_sql:
+            sqls.append((dim, r.chosen.equivalent_sql))
+    if len(sqls) == 1:
+        return sqls[0][1]
+    if len(sqls) > 1:
+        return None
+    original = (ctx.analysis or {}).get("query") if ctx.analysis else None
+    return original if isinstance(original, str) and original.strip() else None
 
 
 # ---------------------------------------------------------------------------

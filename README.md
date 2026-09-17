@@ -90,25 +90,26 @@
 
 ```bash
 pip install -r requirements.txt        # sqlglot（解析）、pytest（测试）
+pip install -e .                       # 可选：安装 mataof 命令（或用 python -m mataof）
 
-# 使用
-python3 -c "
-from mataof.agents.query_analysis import analyze
-import json
-r = analyze('SELECT AVG(s_0) FROM root.test.d_0 GROUP BY ([1640966405000, 1640976405000), 1h)',
-            query_id='q1')
-print(json.dumps(r, ensure_ascii=False, indent=2))
-"
+# 正式入口：运行一条查询（四 Agent 闭环）
+mataof run "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 AND time <= 1640970000000"
 
-# 示例
-python3 examples/analyze_example.py      # Query Analysis Agent
-python3 examples/decide_example.py       # 分析 → 决策流水线
-python3 examples/monitor_example.py      # 分析 → 决策 → 执行 → 监控反馈流水线
-python3 examples/knowledge_example.py    # 四 Agent 完整闭环（经验积累 → 检索复用）
+# 真实 IoTDB 执行（先启动 IoTDB，配置见 config.iotdb.example.json）
+mataof run "SELECT s_0 FROM root.test.g_0.d_0 WHERE time >= 1640966400000 AND time <= 1640966650000" \
+           --config config.iotdb.example.json
+
+# 批量运行 / 检索知识 / 查看知识库
+mataof run --file queries.sql --config config.json
+mataof retrieve "SELECT AVG(s_0) FROM root.test.d_0 GROUP BY ([0, 1000000), 1h)"
+mataof stats
 
 # 测试
 python3 -m pytest tests/ -v
 ```
+
+正式运行手册（配置文件、执行层对接、追踪输出）见 [docs/cli.md](docs/cli.md)；
+各 Agent 的输入/输出契约见 docs/ 下的规格文档。
 
 ## 目录结构
 
@@ -148,14 +149,21 @@ MATAOF/
 │           ├── store.py              # append-only JSON 持久化存储
 │           ├── record.py             # 历史记录装配（三 Agent 输出关联）
 │           └── retrieval.py          # 三层匹配检索 + 成功/失败模式汇总
-├── similarity.py                     # 共享相似度口径（KM 检索与决策证据共用）
-├── tests/                            # 106 例单元测试 + 真实 IoTDB 语料鲁棒性验证
+│   ├── similarity.py                 # 共享相似度口径（KM 检索与决策证据共用）
+│   ├── runner.py                     # 正式运行入口：四 Agent 闭环 + 追踪落盘
+│   ├── cli.py                        # 命令行入口（run/retrieve/stats）
+│   ├── __main__.py                   # python -m mataof
+│   └── executors/                    # 执行层抽象：Null / File（回放）/ IoTDB（真实执行）
+├── pyproject.toml                    # 可安装（console script: mataof）
+├── config.example.json               # 配置文件模板
+├── tests/                            # 117 例单元测试 + 真实 IoTDB 语料鲁棒性验证
 ├── examples/
 │   ├── analyze_example.py
 │   ├── decide_example.py
 │   ├── monitor_example.py
 │   └── knowledge_example.py
 └── docs/
+    ├── cli.md                        # 运行手册（正式入口）
     ├── query-analysis-agent.md       # Query Analysis Agent 规格说明
     ├── optimization-decision-agent.md # Optimization Decision Agent 规格说明
     ├── execution-monitoring-agent.md  # Execution Monitoring Agent 规格说明

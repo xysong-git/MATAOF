@@ -105,6 +105,32 @@ def main() -> None:
     )
     print(json.dumps(r4, ensure_ascii=False, indent=2))
 
+    # 场景 5：混合模型 —— 候选携带等价 SQL，决策输出可直接执行的 SQL
+    print("=" * 20, "场景 5：候选携带等价 SQL（混合模型）", "=" * 20)
+    query5 = (
+        "SELECT s_1666 FROM root.db800.g_0.d_0 "
+        "WHERE root.db800.g_0.d_0.s_1666 > -5 AND root.db800.g_0.d_0.s_1766 > -5 "
+        "AND time >= 1640966400000 AND time <= 1640966650000"
+    )
+    time_first_sql = (
+        "SELECT s_1666 FROM root.db800.g_0.d_0 "
+        "WHERE time >= 1640966400000 AND time <= 1640966650000 "
+        "AND root.db800.g_0.d_0.s_1666 > -5 AND root.db800.g_0.d_0.s_1766 > -5"
+    )
+    r5 = run_pipeline(
+        query5, "s5",
+        candidate_strategies={
+            "filter_order": [
+                {"strategy": "time_first", "equivalent_sql": time_first_sql},
+                "device_tag_first",
+            ],
+            "time_pruning": ["full_scan", "partition_pruning"],
+            "aggregation_placement": [],
+        },
+    )
+    print("选中策略：", r5["selected_strategy"]["strategy_id"])
+    print("可直接执行的等价 SQL：", r5["selected_strategy"]["equivalent_sql"])
+
 
 if __name__ == "__main__":
     main()

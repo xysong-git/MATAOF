@@ -12,6 +12,9 @@ Knowledge Memory Agent 提供的历史执行经验，在预定义的候选策略
 **严格界限**：
 - **有界策略空间**：候选 = 输入候选策略 ∩ 策略目录（`catalog.py`）；禁止自行创造候选
   策略；目录之外的策略名一律拒绝（记入 `notes`）；
+- **混合输出模型**：输出 = 策略标识 + 等价 SQL + 执行级参数。等价 SQL 由候选提供方
+  随候选携带，**决策 Agent 自身不生成/改写 SQL**（只选择）；不可 SQL 表达的维度
+  （分区/chunk 裁剪、聚合位置）输出执行级参数，由执行层按 strategy_id 应用；
 - **上下文感知**：决策必须综合 Query Features + Database State + System State +
   Historical Knowledge；缺少 `query_analysis`（仅 SQL 文本）→ `invalid_input`；
 - **历史知识是证据而非规则**：只有相似度达标（阈值 0.5）的记录参与决策，并按相似度/
@@ -38,7 +41,13 @@ Knowledge Memory Agent 提供的历史执行经验，在预定义的候选策略
   "historical_records": [ ... ],          // 可选；格式见 schemas.HISTORICAL_RECORD_CONTRACT
   "candidate_strategies": {               // 可选；缺失 → 使用目录全集
     "time_pruning": ["full_scan", "partition_pruning"],
-    "filter_order": ["time_first"],
+    "filter_order": [
+      // 富条目：候选提供方给出等价 SQL（决策 Agent 只选择、不生成 SQL）
+      {"strategy": "time_first",
+       "equivalent_sql": "SELECT ... WHERE time >= ... AND s1 > 10 ...",
+       "parameters": {"hint": "..."}},
+      "device_tag_first"
+    ],
     "aggregation_placement": []
   },
   "baseline_strategy": {"time_pruning": "full_scan"},   // 可选；缺失 → 内置安全默认
@@ -52,16 +61,16 @@ Knowledge Memory Agent 提供的历史执行经验，在预定义的候选策略
 
 ## 3. 有界策略目录（`catalog.py`）
 
-| 维度 | 策略 | 风险 | 需求（不满足 → 排除） |
-|---|---|---|---|
-| time_pruning | full_scan | low | 无 |
-| time_pruning | partition_pruning | medium | 时间过滤边界已知 |
-| time_pruning | chunk_level_filtering | high | 边界已知 + 数据库提供 chunk 级物理组织信息 |
-| filter_order | time_first | low | 非时间条件 ≥ 2 |
-| filter_order | device_tag_first | medium | 非时间条件 ≥ 2 |
-| aggregation_placement | final_level_aggregation | low | 含聚合 |
-| aggregation_placement | intermediate_level_aggregation | medium | 含聚合 |
-| aggregation_placement | scan_level_aggregation | medium | 含聚合（执行层支持 = 外部系统将其列入候选） |
+| 维度 | 策略 | 风险 | 需求（不满足 → 排除） | SQL 可表达 |
+|---|---|---|---|---|
+| time_pruning | full_scan | low | 无 | 否（执行级） |
+| time_pruning | partition_pruning | medium | 时间过滤边界已知 | 否（执行级） |
+| time_pruning | chunk_level_filtering | high | 边界已知 + 数据库提供 chunk 级物理组织信息 | 否（执行级） |
+| filter_order | time_first | low | 非时间条件 ≥ 2 | **是**（WHERE 重排） |
+| filter_order | device_tag_first | medium | 非时间条件 ≥ 2 | **是**（WHERE 重排） |
+| aggregation_placement | final_level_aggregation | low | 含聚合 | 否（执行级） |
+| aggregation_placement | intermediate_level_aggregation | medium | 含聚合 | 否（执行级） |
+| aggregation_placement | scan_level_aggregation | medium | 含聚合（执行层支持 = 外部系统将其列入候选） | 否（执行级） |
 
 内置安全 baseline：`full_scan` / `time_first` / `final_level_aggregation`（输入可覆盖）。
 
@@ -121,13 +130,21 @@ partition/chunk/time_first/scan_level +0.05。
 
 ## 7. 输出契约（schema v1.0）
 
-顶层：`query_id`、`decision`（三维度各 {strategy, reason, confidence}）、
-`selected_strategy`（strategy_id + strategy_parameters）、`evidence`（实际用于决策的
-条目）、`overall_confidence`、`fallback_strategy`、`decision_status`、`notes`（扩展）。
+顶层：`query_id`、`decision`（三维度各 {strategy, reason, confidence,
+equivalent_sql}）、`selected_strategy`（strategy_id + strategy_parameters +
+equivalent_sql）、`evidence`（实际用于决策的条目）、`overall_confidence`、
+`fallback_strategy`、`decision_status`、`notes`（扩展）。
 
 - 维度不适用（如查询无聚合）→ `strategy = "not_applicable"` + 原因，置信度 0；
 - `decision_status`：success / partial_fallback / fallback / invalid_input；
-- `strategy_parameters` 只包含事实性取值（如裁剪时间边界），不虚构；
+- `strategy_parameters` 只包含事实性取值（如裁剪时间边界）+ 候选提供的执行级参数；
+- **equivalent_sql（混合模型）**：
+  - 维度级：选中候选携带的等价 SQL，未携带 → null；
+  - 组合规则（`selected_strategy.equivalent_sql`，可直接执行的 SQL）：
+    - 0 个维度携带 → 原查询文本（策略为执行级参数，SQL 不变）；
+    - 恰好 1 个维度携带 → 该 SQL；
+    - ≥2 个维度携带 → null（按维度独立生成的 SQL 无法可靠组合），
+      执行层按 strategy_id 与各维度参数执行，绝不输出可能错误的 SQL；
 - reason 引用具体证据（跨度/分区覆盖/历史记录数/相似度/系统负载），
   以"在当前信息条件下选择 X"结尾，不出现全局最优声明。
 

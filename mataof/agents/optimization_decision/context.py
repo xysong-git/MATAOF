@@ -87,46 +87,88 @@ def compact_features(analysis: dict) -> dict:
     return _compact_features(analysis)
 
 
-def _normalize_candidates(raw: Any, notes: list) -> dict[str, list[str]]:
-    """候选集合归一化：按维度 dict 或扁平名称列表 → 目录内合法候选。"""
-    out: dict[str, list[str]] = {}
+def _normalize_candidates(raw: Any, notes: list) -> dict[str, list[dict]]:
+    """候选集合归一化：按维度 dict 或扁平列表 → 目录内合法候选。
+
+    候选条目支持两种形式（混合模型）：
+    - 纯名称："time_first"（向后兼容；等价 SQL 缺省 → None）
+    - 富条目：{"strategy": "time_first",
+                "equivalent_sql": "SELECT ...（候选提供方生成的原查询等价形式）",
+                "parameters": {...执行级参数...}}
+    equivalent_sql 由候选提供方（外部系统）生成，决策 Agent 只选择、不生成/改写 SQL。
+    """
+    def _entry(item: Any, dim: str) -> Optional[dict]:
+        if isinstance(item, str):
+            name = item
+            sql, params = None, None
+        elif isinstance(item, dict) and item.get("strategy"):
+            name = item["strategy"]
+            sql = item.get("equivalent_sql")
+            params = item.get("parameters")
+            if sql is not None and not (isinstance(sql, str) and sql.strip()):
+                notes.append(f"候选 {name} 的 equivalent_sql 无效（非空字符串），忽略其 SQL 形式")
+                sql = None
+            if params is not None and not isinstance(params, dict):
+                notes.append(f"候选 {name} 的 parameters 无效（非对象），忽略")
+                params = None
+        else:
+            return None
+        if catalog_strategy(dim, name) is None:
+            return None
+        return {"name": name, "equivalent_sql": sql, "parameters": params}
+
+    out: dict[str, list[dict]] = {}
     if raw is None:
         for d in DIMENSIONS:
-            out[d] = list(STRATEGY_CATALOG[d].keys())
+            out[d] = [{"name": n, "equivalent_sql": None, "parameters": None}
+                      for n in STRATEGY_CATALOG[d].keys()]
         return out
     if isinstance(raw, dict):
         for d in DIMENSIONS:
             items = raw.get(d)
             if items is None:
-                out[d] = list(STRATEGY_CATALOG[d].keys())  # 该维度未指定 → 目录全集
+                out[d] = [{"name": n, "equivalent_sql": None, "parameters": None}
+                          for n in STRATEGY_CATALOG[d].keys()]
                 continue
             if not isinstance(items, list):
                 notes.append(f"候选策略维度 {d} 的值不是列表，忽略，使用目录全集")
-                out[d] = list(STRATEGY_CATALOG[d].keys())
+                out[d] = [{"name": n, "equivalent_sql": None, "parameters": None}
+                          for n in STRATEGY_CATALOG[d].keys()]
                 continue
             valid, dropped = [], []
-            for name in items:
-                if catalog_strategy(d, name) is not None:
-                    valid.append(name)
+            for item in items:
+                e = _entry(item, d)
+                if e is not None:
+                    valid.append(e)
                 else:
-                    dropped.append(name)
+                    dropped.append(item if isinstance(item, str) else item.get("strategy", item))
             if dropped:
-                notes.append(f"候选策略中被忽略的未知名称（维度 {d}）：{dropped}（不在策略目录中）")
-            out[d] = valid if valid else list(STRATEGY_CATALOG[d].keys())
+                notes.append(f"候选策略中被忽略的未知条目（维度 {d}）：{dropped}（不在策略目录中）")
+            out[d] = valid if valid else [{"name": n, "equivalent_sql": None, "parameters": None}
+                                          for n in STRATEGY_CATALOG[d].keys()]
         return out
     if isinstance(raw, list):
-        for name in raw:
+        for item in raw:
+            name = item if isinstance(item, str) else (
+                item.get("strategy") if isinstance(item, dict) else None)
+            if name is None:
+                notes.append(f"候选策略中被忽略的未知条目：{item}（不在策略目录中）")
+                continue
             d = dimension_of_strategy(name)
             if d is None:
                 notes.append(f"候选策略中被忽略的未知名称：{name}（不在策略目录中）")
                 continue
-            out.setdefault(d, []).append(name)
+            e = _entry(item, d)
+            if e is not None:
+                out.setdefault(d, []).append(e)
         for d in DIMENSIONS:
             if d not in out:
-                out[d] = list(STRATEGY_CATALOG[d].keys())
+                out[d] = [{"name": n, "equivalent_sql": None, "parameters": None}
+                          for n in STRATEGY_CATALOG[d].keys()]
         return out
     notes.append("candidate_strategies 格式无法识别，使用策略目录全集")
-    return {d: list(STRATEGY_CATALOG[d].keys()) for d in DIMENSIONS}
+    return {d: [{"name": n, "equivalent_sql": None, "parameters": None}
+                for n in STRATEGY_CATALOG[d].keys()] for d in DIMENSIONS}
 
 
 def _normalize_baseline(raw: Any, notes: list) -> dict[str, str]:

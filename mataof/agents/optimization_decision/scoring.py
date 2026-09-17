@@ -64,6 +64,8 @@ class CandidateEvaluation:
     history_bonus: float
     system_bonus: float
     factor_labels: list = field(default_factory=list)     # 用于 reason 的可追踪说明
+    equivalent_sql: Optional[str] = None                  # 候选提供方给出的等价 SQL
+    parameters: Optional[dict] = None                     # 候选提供的执行级参数
     requirements_met: bool = True
     gate_passed: bool = True
     excluded_reason: Optional[str] = None
@@ -285,9 +287,10 @@ def evaluate_dimension(dim: str, ctx: DecisionContext,
     result.applicable = True
 
     catalog = STRATEGY_CATALOG[dim]
-    candidates = [c for c in ctx.candidates.get(dim, []) if c in catalog]
+    candidates = [c for c in ctx.candidates.get(dim, []) if c["name"] in catalog]
 
-    for name in candidates:
+    for cand in candidates:
+        name = cand["name"]
         meta = catalog[name]
         labels: list = []
 
@@ -296,7 +299,9 @@ def evaluate_dimension(dim: str, ctx: DecisionContext,
         evl = CandidateEvaluation(name=name, dimension=dim, risk=meta["risk"],
                                   score=0.0, base=BASE_SCORES[name],
                                   context_bonus=0.0, history_bonus=0.0,
-                                  system_bonus=0.0, factor_labels=labels)
+                                  system_bonus=0.0, factor_labels=labels,
+                                  equivalent_sql=cand.get("equivalent_sql"),
+                                  parameters=cand.get("parameters"))
         if unmet:
             evl.requirements_met = False
             evl.excluded_reason = "需求不满足：" + "；".join(

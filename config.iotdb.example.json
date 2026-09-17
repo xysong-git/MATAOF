@@ -1,0 +1,19 @@
+{
+  "knowledge_store": "data/knowledge.json",
+  "results_dir": "results",
+  "executor": {
+    "type": "iotdb",
+    "host": "127.0.0.1",
+    "port": 6667,
+    "user": "root",
+    "password": "root",
+    "fetch_size": 1024,
+    "measure_baseline": true
+  },
+  "database_state": {},
+  "system_state": {},
+  "candidate_strategies": null,
+  "baseline_strategy": null,
+  "thresholds": {},
+  "reference_time": null
+}

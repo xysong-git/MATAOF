@@ -202,15 +202,21 @@ def optimization_decision_output_template() -> dict:
     """返回 Optimization Decision Agent 输出模板的全新深拷贝。
 
     字段语义、决策状态枚举与置信度公式见 docs/optimization-decision-agent.md。
+    equivalent_sql 为混合模型输出：等价 SQL 由候选提供方随候选携带，
+    决策 Agent 只负责选择、不生成/改写 SQL。
     """
     return {
         "query_id": "",
         "decision": {
-            "time_pruning": {"strategy": "", "reason": "", "confidence": 0.0},
-            "filter_order": {"strategy": "", "reason": "", "confidence": 0.0},
-            "aggregation_placement": {"strategy": "", "reason": "", "confidence": 0.0},
+            "time_pruning": {"strategy": "", "reason": "", "confidence": 0.0,
+                             "equivalent_sql": None},
+            "filter_order": {"strategy": "", "reason": "", "confidence": 0.0,
+                             "equivalent_sql": None},
+            "aggregation_placement": {"strategy": "", "reason": "", "confidence": 0.0,
+                                      "equivalent_sql": None},
         },
-        "selected_strategy": {"strategy_id": "", "strategy_parameters": {}},
+        "selected_strategy": {"strategy_id": "", "strategy_parameters": {},
+                              "equivalent_sql": None},
         "evidence": {
             "query_features": [],            # 实际用于决策的特征条目（字符串）
             "database_state": [],            # 实际用于决策的数据库状态条目

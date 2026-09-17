@@ -27,7 +27,9 @@ REQUIRED_DIMS = ("time_pruning", "filter_order", "aggregation_placement")
 def _check_schema(r: dict) -> None:
     assert set(REQUIRED_TOP_KEYS) <= set(r.keys())
     for d in REQUIRED_DIMS:
-        assert set(r["decision"][d].keys()) == {"strategy", "reason", "confidence"}
+        assert set(r["decision"][d].keys()) == {"strategy", "reason", "confidence",
+                                                "equivalent_sql"}
+    assert "equivalent_sql" in r["selected_strategy"]
     assert 0.0 <= r["overall_confidence"] <= 1.0
     json.dumps(r)
 
@@ -328,6 +330,114 @@ def test_no_optimality_claims():
             reason = r["decision"][d]["reason"]
             for bad in ("全局最优", "绝对最优", "最优策略"):
                 assert bad not in reason, f"{d} 出现越权声明：{reason}"
+
+
+# ---------------------------------------------------------------------------
+# 混合模型：候选携带等价 SQL，决策输出可直接执行的 SQL
+# ---------------------------------------------------------------------------
+
+def test_candidate_carries_equivalent_sql():
+    reordered = (
+        "SELECT s_1666 FROM root.db800.g_0.d_0 WHERE time >= 1640966400000 "
+        "AND time <= 1640966650000 AND root.db800.g_0.d_0.s_1666 > -5 "
+        "AND root.db800.g_0.d_0.s_1766 > -5"
+    )
+    r = _decide(
+        "SELECT s_1666 FROM root.db800.g_0.d_0 "
+        "WHERE root.db800.g_0.d_0.s_1666 > -5 AND root.db800.g_0.d_0.s_1766 > -5 "
+        "AND time >= 1640966400000 AND time <= 1640966650000",
+        candidate_strategies={
+            "filter_order": [
+                {"strategy": "time_first", "equivalent_sql": reordered},
+                {"strategy": "device_tag_first"},
+            ],
+            "time_pruning": ["full_scan", "partition_pruning"],
+            "aggregation_placement": [],
+        },
+    )
+    assert r["decision"]["filter_order"]["strategy"] == "time_first"
+    assert r["decision"]["filter_order"]["equivalent_sql"] == reordered
+    # 唯一 SQL 维度 → 组合结果即该 SQL，可直接交给执行层
+    assert r["selected_strategy"]["equivalent_sql"] == reordered
+
+
+def test_no_sql_candidate_returns_original_query():
+    # 全部为执行级策略（裁剪/聚合位置）→ 等价 SQL 为原查询文本
+    r = _decide("SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 "
+                "AND time <= 1640970000000")
+    assert r["selected_strategy"]["equivalent_sql"] == (
+        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 "
+        "AND time <= 1640970000000"
+    )
+
+
+def test_multiple_sql_dimensions_not_composed():
+    # 两个维度都提供 SQL（按维度独立生成）→ 不冒险组合，置 null
+    r = _decide(
+        "SELECT s_1 FROM root.sg1.d1 WHERE s1 > 10 AND t1 = 'v' "
+        "AND time >= 1 AND time <= 2",
+        candidate_strategies={
+            "time_pruning": [
+                {"strategy": "full_scan",
+                 "equivalent_sql": "SELECT s_1 FROM root.sg1.d1 WHERE time >= 1 AND time <= 2 AND s1 > 10 AND t1 = 'v'"},
+            ],
+            "filter_order": [
+                {"strategy": "time_first",
+                 "equivalent_sql": "SELECT s_1 FROM root.sg1.d1 WHERE time >= 1 AND time <= 2 AND s1 > 10 AND t1 = 'v'"},
+            ],
+            "aggregation_placement": [],
+        },
+    )
+    assert r["selected_strategy"]["equivalent_sql"] is None
+    assert r["decision"]["filter_order"]["equivalent_sql"] is not None  # 维度级仍各自给出
+
+
+def test_candidate_parameters_passed_through():
+    r = _decide(
+        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 "
+        "AND time <= 1640970000000",
+        candidate_strategies={
+            "time_pruning": [
+                {"strategy": "partition_pruning",
+                 "parameters": {"hint": "partition_scan"}},
+            ],
+            "filter_order": [], "aggregation_placement": [],
+        },
+    )
+    params = r["selected_strategy"]["strategy_parameters"]
+    assert params["time_pruning"]["hint"] == "partition_scan"
+    assert params["time_pruning"]["start_time"] == 1640966405000  # 事实性参数仍保留
+
+
+def test_plain_name_candidates_backward_compatible():
+    # 纯名称候选（旧格式）仍可用，equivalent_sql 为 null
+    r = _decide(
+        "SELECT s_1666 FROM root.db800.g_0.d_0 WHERE time >= 1640966400000 "
+        "AND time <= 1640966650000 AND root.db800.g_0.d_0.s_1666 > -5 "
+        "AND root.db800.g_0.d_0.s_1766 > -5",
+        candidate_strategies={"filter_order": ["time_first", "device_tag_first"],
+                              "time_pruning": ["full_scan"],
+                              "aggregation_placement": []},
+    )
+    assert r["decision"]["filter_order"]["strategy"] == "time_first"
+    assert r["decision"]["filter_order"]["equivalent_sql"] is None
+    # 无 SQL 候选 → 组合结果为原查询文本
+    assert r["selected_strategy"]["equivalent_sql"].startswith("SELECT s_1666")
+
+
+def test_invalid_equivalent_sql_ignored():
+    r = _decide(
+        "SELECT s_1 FROM root.sg1.d1 WHERE s1 > 10 AND t1 = 'v'",
+        candidate_strategies={
+            "filter_order": [
+                {"strategy": "time_first", "equivalent_sql": ""},   # 空串无效
+                "device_tag_first",
+            ],
+            "time_pruning": [], "aggregation_placement": [],
+        },
+    )
+    assert r["decision"]["filter_order"]["equivalent_sql"] is None
+    assert any("equivalent_sql" in n for n in r["notes"])
 
 
 # ---------------------------------------------------------------------------

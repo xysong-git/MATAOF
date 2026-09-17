@@ -31,6 +31,7 @@ STRATEGY_CATALOG: dict[str, dict[str, dict]] = {
             "dimension": "time_pruning",
             "description": "不做时间裁剪优化，按查询范围完整扫描（安全默认，无额外要求）。",
             "risk": "low",
+            "sql_expressible": False,
             "requirements": [],
         },
         "partition_pruning": {
@@ -39,6 +40,7 @@ STRATEGY_CATALOG: dict[str, dict[str, dict]] = {
             "description": "依据查询时间边界跳过不相关分区。需求：时间过滤边界已知；"
                            "分区元数据可进一步支撑裁剪覆盖度评估。",
             "risk": "medium",
+            "sql_expressible": False,   # 裁剪是执行层行为，SQL 文本不变（时间边界已在 WHERE 中）
             "requirements": [
                 {"path": "query_features.time.has_time_filter", "op": "true"},
                 {"path": "query_features.time.start_time", "op": "known"},
@@ -51,6 +53,7 @@ STRATEGY_CATALOG: dict[str, dict[str, dict]] = {
             "description": "下沉到 chunk 级别的时间过滤。需求：时间边界已知 + 数据库提供 "
                            "chunk 级物理组织信息。高风险：依赖执行层能力与元数据完整性。",
             "risk": "high",
+            "sql_expressible": False,   # chunk 级过滤为执行层能力，无对应 SQL 语法
             "requirements": [
                 {"path": "query_features.time.has_time_filter", "op": "true"},
                 {"path": "query_features.time.start_time", "op": "known"},
@@ -66,6 +69,7 @@ STRATEGY_CATALOG: dict[str, dict[str, dict]] = {
             "description": "优先评估时间过滤（时序库按时间维度物理组织，时间过滤可跳过"
                            "不相关时间块；无需选择率数据即可成立的结构性依据）。",
             "risk": "low",
+            "sql_expressible": True,    # WHERE 谓词重排即可表达为等价 SQL
             "requirements": [
                 {"path": "query_features.filter.non_time_filter_count", "op": "gte2"},
             ],
@@ -77,6 +81,7 @@ STRATEGY_CATALOG: dict[str, dict[str, dict]] = {
                            "只有获得选择率或设备规模等数据支撑时才具备优势依据"
                            "（不得在缺乏数据时假设其选择性更高）。",
             "risk": "medium",
+            "sql_expressible": True,    # WHERE 谓词重排即可表达为等价 SQL
             "requirements": [
                 {"path": "query_features.filter.non_time_filter_count", "op": "gte2"},
             ],
@@ -88,6 +93,7 @@ STRATEGY_CATALOG: dict[str, dict[str, dict]] = {
             "dimension": "aggregation_placement",
             "description": "聚合在最终层执行（数据库默认行为，最小侵入，安全默认）。",
             "risk": "low",
+            "sql_expressible": False,
             "requirements": [
                 {"path": "query_features.aggregation.has_aggregation", "op": "true"},
             ],
@@ -98,6 +104,7 @@ STRATEGY_CATALOG: dict[str, dict[str, dict]] = {
             "description": "聚合在中间层执行（分组后、最终归并前）。有 GROUP BY 或"
                            "中间结果规模较大时具有结构性依据。",
             "risk": "medium",
+            "sql_expressible": False,   # 聚合位置为执行层概念，标准 SQL 无对应语法
             "requirements": [
                 {"path": "query_features.aggregation.has_aggregation", "op": "true"},
             ],
@@ -108,6 +115,7 @@ STRATEGY_CATALOG: dict[str, dict[str, dict]] = {
             "description": "聚合下推到扫描层。需求：外部系统将本策略列入候选（即声明执行层"
                            "支持）；并需要扫描量小/时间范围窄/窗口聚合等支撑信号之一。",
             "risk": "medium",
+            "sql_expressible": False,   # 聚合下推为执行层能力，无对应 SQL 语法
             "requirements": [
                 {"path": "query_features.aggregation.has_aggregation", "op": "true"},
             ],

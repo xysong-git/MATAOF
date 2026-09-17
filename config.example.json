@@ -1,0 +1,11 @@
+{
+  "knowledge_store": "data/knowledge.json",
+  "results_dir": "results",
+  "executor": {"type": "null"},
+  "database_state": {},
+  "system_state": {},
+  "candidate_strategies": null,
+  "baseline_strategy": null,
+  "thresholds": {},
+  "reference_time": null
+}
