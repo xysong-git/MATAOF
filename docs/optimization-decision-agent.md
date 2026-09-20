@@ -148,7 +148,34 @@ equivalent_sql）、`evidence`（实际用于决策的条目）、`overall_confi
 - reason 引用具体证据（跨度/分区覆盖/历史记录数/相似度/系统负载），
   以"在当前信息条件下选择 X"结尾，不出现全局最优声明。
 
-## 8. 与上下游的接口约定
+## 8. LLM 语义增强（混合增强模式）
+
+确定性评分与风险门控是权威；LLM 只填充 `llm_analysis` 附加节：
+
+```json
+"llm_analysis": {
+  "available": true,
+  "semantic_reason": "窄时间范围且分区覆盖低，partition_pruning 有明确依据；当前信息条件下的选择。",
+  "preferences": {"time_pruning": ["partition_pruning", "full_scan"], ...},
+  "notes": []
+}
+```
+
+- `semantic_reason`：对最终决策的自然语言解读（llm_generated，明确"当前信息条件下"）；
+- `preferences`：候选偏好排序，**严格校验**（只允许输入候选集合中的策略名，非法条目丢弃）；
+- **实验性偏好加分**（默认关闭）：`decision_input["llm_preference_bonus"]=true`
+  时，LLM 第一偏好 +0.05 分。硬性边界：
+  - 加分**不参与风险门控**（LLM 不能解锁高风险策略、不能改变证据不足回退 baseline
+    的安全路径）；
+  - 加分有界（0.05），强证据下的选择不会被 LLM 翻盘；
+  - LLM 失败/输出非法 → 无加分，决策与不启用 LLM 完全一致（确定性兜底）；
+- 非确定性说明：启用 LLM 后 `llm_analysis` 节受模型随机性影响；核心决策字段在
+  `llm_preference_bonus=false` 时保持确定性。
+
+接入方式：`decide(decision_input, llm=llm_client)`；客户端由共享层构造
+（`mataof/llm.py`，配置见 docs/cli.md 的 llm 节）。
+
+## 9. 与上下游的接口约定
 
 - 上游（Query Analysis Agent）：消费其完整输出；`analysis_confidence` 参与整体置信度；
 - 上游（Knowledge Memory Agent）：消费 `historical_records`（契约见

@@ -87,7 +87,25 @@ Strategy + Execution Metrics + Execution Result + Timestamp）：
   报告 increased/decreased，否则 null（单次异常不立即否定历史，评价随累计更新）；
 - 输出规格字段 + notes（扩展）。
 
-## 6. 与上下游的接口约定
+## 6. LLM 语义增强（混合增强模式）
+
+确定性检索与 append-only 事实记录是权威；LLM 只提供解读与总结：
+
+- **retrieve 增强**（`llm_analysis` 节）：
+  - `semantic_summary`：对匹配结果、成功模式、失败经验的自然语言解读
+    （llm_generated；**prompt 明确禁止策略建议**——KM 不决策原则不变）；
+- **update 增强**（`llm_analysis` 节）：
+  - `experience_note`：本次执行经验的自然语言总结（单次观察不表述为规律），
+    随记录存入知识库的 `llm_note` 字段——与事实字段隔离的 LLM 生成元数据；
+- **确定性兜底**：LLM 未启用/失败/输出非法 → `available=false` + notes；
+  检索结果与入库记录完全不变（失败时不写入任何 LLM 元数据）；
+- **非确定性说明**：`llm_analysis`/`llm_note` 受模型随机性影响；匹配、
+  统计、成功率等核心字段保持确定性。
+
+接入方式：`KnowledgeMemoryAgent(store_path=..., llm=llm_client)`；
+客户端由共享层构造（`mataof/llm.py`，配置见 docs/cli.md 的 llm 节）。
+
+## 7. 与上下游的接口约定
 
 - 上游（三个 Agent）：query_analysis + decision + monitoring + 上下文 + 时间戳 →
   `km.update(...)`；

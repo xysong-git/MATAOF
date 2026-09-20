@@ -46,13 +46,16 @@ def _cmd_run(args) -> int:
                     item = json.loads(line)
                     queries.append((str(item.get("query") or ""), str(item.get("query_id") or "")))
         else:
+            from mataof.runner import split_sql_statements
             with open(args.file, encoding="utf-8") as f:
                 text = f.read()
-            queries.extend((s.strip(), "") for s in text.split(";") if s.strip())
+            queries.extend((s, "") for s in split_sql_statements(text))
     if not queries:
         print("错误：请提供查询（位置参数或 --file）", file=sys.stderr)
         return 2
 
+    if getattr(args, "limit", None):
+        queries = queries[: int(args.limit)]
     traces = []
     for query, query_id in queries:
         trace = runner.run_query(query, query_id=query_id)
@@ -116,6 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="运行查询（四 Agent 闭环）")
     p_run.add_argument("query", nargs="*", help="查询 SQL（可多条）")
     p_run.add_argument("--file", help="查询文件（.sql 按分号拆分；.jsonl 每行 {query_id, query}）")
+    p_run.add_argument("--limit", type=int, help="最多运行的查询数（按文件顺序截取）")
     p_run.add_argument("--config", help="JSON 配置文件")
     p_run.add_argument("--results-dir", help="追踪输出目录（覆盖配置）")
     p_run.add_argument("--json", action="store_true", help="stdout 输出 JSON")

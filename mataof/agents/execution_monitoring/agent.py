@@ -45,6 +45,7 @@ from mataof.agents.execution_monitoring.assessment import (
     strategy_effective_mapping,
 )
 from mataof.agents.execution_monitoring.anomalies import detect_anomalies
+from mataof.agents.execution_monitoring.llm_enhance import build_llm_analysis
 
 
 class ExecutionMonitoringAgent:
@@ -64,7 +65,14 @@ class ExecutionMonitoringAgent:
     name = "execution_monitoring"
     description = "采集查询的真实执行指标，关联执行策略，生成结构化执行反馈。"
 
-    def monitor(self, monitoring_input: dict) -> dict:
+    def monitor(self, monitoring_input: dict,
+                llm: Optional[object] = None) -> dict:
+        """事实采集入口。llm：可选 LLMClient（混合增强模式）。
+
+        - LLM 只填充 llm_analysis 节（事实复述 + 异常关联解读），
+          数字级校验拒绝任何给定数据之外的数字；
+        - llm=None / 失败 / 非法输出 → 事实字段完全不变（确定性兜底）。
+        """
         output = execution_monitoring_output_template()
         inp = monitoring_input if isinstance(monitoring_input, dict) else {}
         notes: list[str] = []
@@ -108,6 +116,9 @@ class ExecutionMonitoringAgent:
         )
 
         output["notes"] = notes
+
+        # ---- LLM 语义增强（只进 llm_analysis 节；失败不影响事实）----
+        output["llm_analysis"] = build_llm_analysis(llm, output)
         return output
 
 
@@ -115,6 +126,6 @@ class ExecutionMonitoringAgent:
 default_agent = ExecutionMonitoringAgent()
 
 
-def monitor(monitoring_input: dict) -> dict:
-    """Execution Monitoring Agent 的便捷入口。"""
-    return default_agent.monitor(monitoring_input)
+def monitor(monitoring_input: dict, llm: Optional[object] = None) -> dict:
+    """Execution Monitoring Agent 的便捷入口。llm 为可选 LLMClient（混合增强）。"""
+    return default_agent.monitor(monitoring_input, llm=llm)

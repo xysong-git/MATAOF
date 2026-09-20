@@ -1,0 +1,462 @@
+{
+  "query_id": "dbs_q5_3",
+  "query": "SELECT count(s_337), count(s_437) FROM root.dbs.g_0.d_8, root.dbs.g_0.d_9 WHERE root.dbs.g_0.d_8.s_337 > -1 AND root.dbs.g_0.d_8.s_437 > -1 AND root.dbs.g_0.d_9.s_337 > -1 AND root.dbs.g_0.d_9.s_437 > -1",
+  "analysis": {
+    "query_id": "dbs_q5_3",
+    "query": "SELECT count(s_337), count(s_437) FROM root.dbs.g_0.d_8, root.dbs.g_0.d_9 WHERE root.dbs.g_0.d_8.s_337 > -1 AND root.dbs.g_0.d_8.s_437 > -1 AND root.dbs.g_0.d_9.s_337 > -1 AND root.dbs.g_0.d_9.s_437 > -1",
+    "query_type": "complex_composite_query",
+    "query_features": {
+      "time": {
+        "has_time_filter": false,
+        "start_time": null,
+        "end_time": null,
+        "time_span": null,
+        "range_level": "unknown",
+        "time_condition_form": null,
+        "time_filter_expressions": []
+      },
+      "device": {
+        "has_device_filter": true,
+        "device_count": 2,
+        "multi_device": true,
+        "device_paths": [
+          "root.dbs.g_0.d_8",
+          "root.dbs.g_0.d_9"
+        ],
+        "device_condition_count": 2
+      },
+      "filter": {
+        "filter_count": 4,
+        "filter_types": [
+          "value",
+          "value",
+          "value",
+          "value"
+        ],
+        "selectivity": {},
+        "conditions": [
+          {
+            "expression": "root.dbs.g_0.d_8.s_337 > -1",
+            "type": "value",
+            "column": "root.dbs.g_0.d_8.s_337",
+            "operator": "gt",
+            "value": "-1"
+          },
+          {
+            "expression": "root.dbs.g_0.d_8.s_437 > -1",
+            "type": "value",
+            "column": "root.dbs.g_0.d_8.s_437",
+            "operator": "gt",
+            "value": "-1"
+          },
+          {
+            "expression": "root.dbs.g_0.d_9.s_337 > -1",
+            "type": "value",
+            "column": "root.dbs.g_0.d_9.s_337",
+            "operator": "gt",
+            "value": "-1"
+          },
+          {
+            "expression": "root.dbs.g_0.d_9.s_437 > -1",
+            "type": "value",
+            "column": "root.dbs.g_0.d_9.s_437",
+            "operator": "gt",
+            "value": "-1"
+          }
+        ],
+        "type_counts": {
+          "value": 4
+        },
+        "combination": {
+          "op": "and",
+          "left": {
+            "op": "and",
+            "left": {
+              "op": "and",
+              "left": {
+                "op": "leaf",
+                "index": 0
+              },
+              "right": {
+                "op": "leaf",
+                "index": 1
+              }
+            },
+            "right": {
+              "op": "leaf",
+              "index": 2
+            }
+          },
+          "right": {
+            "op": "leaf",
+            "index": 3
+          }
+        }
+      },
+      "aggregation": {
+        "has_aggregation": true,
+        "aggregation_functions": [
+          {
+            "function": "count",
+            "args": [
+              "s_337"
+            ],
+            "distinct": false,
+            "nested_in_window": false
+          },
+          {
+            "function": "count",
+            "args": [
+              "s_437"
+            ],
+            "distinct": false,
+            "nested_in_window": false
+          }
+        ],
+        "has_group_by": false,
+        "has_window": false,
+        "group_by_details": null,
+        "aggregation_scope": {
+          "from_paths": [
+            "root.dbs.g_0.d_8",
+            "root.dbs.g_0.d_9"
+          ],
+          "time_bounds": [
+            null,
+            null
+          ],
+          "window_range": null,
+          "has_non_time_filters": true,
+          "description": "聚合函数：count, count；设备范围：root.dbs.g_0.d_8, root.dbs.g_0.d_9"
+        }
+      },
+      "scan": {
+        "estimated_scan_range": null,
+        "scan_level": "unknown",
+        "possible_large_scan": true,
+        "has_obvious_filter_conditions": true,
+        "possible_large_intermediate_result": true
+      }
+    },
+    "optimization_relevant_features": {
+      "time_pruning": [],
+      "filter_order": [
+        "存在 4 个非时间过滤条件（类型分布：value×4），Filter Order 属于相关候选优化维度。"
+      ],
+      "aggregation_placement": [
+        "查询包含聚合（count），Aggregation Placement 属于相关候选优化维度。",
+        "聚合未使用 GROUP BY，在其访问范围内整体执行，属于 Aggregation Placement 候选场景。"
+      ]
+    },
+    "unknown_features": [
+      "选择率：数据库未提供选择率数据，不做估计",
+      "预计扫描范围：unknown（未提供数据库统计信息，不自行估计）"
+    ],
+    "analysis_confidence": 0.95,
+    "schema_version": "1.0"
+  },
+  "knowledge_retrieval": {
+    "matched_count": 33,
+    "knowledge_confidence": 1.0
+  },
+  "decision": {
+    "query_id": "dbs_q5_3",
+    "decision": {
+      "time_pruning": {
+        "strategy": "not_applicable",
+        "reason": "查询无时间过滤条件，也无时间窗口分组",
+        "confidence": 0.0,
+        "equivalent_sql": null
+      },
+      "filter_order": {
+        "strategy": "time_first",
+        "reason": "非时间过滤条件 4 个；历史证据 13 条（加权 1.00，加权平均延迟 17.5 ms，相对最优比例 0.59，+0.15）；排除：device_tag_first；在当前信息条件下选择 time_first（score 0.7477）。",
+        "confidence": 0.7,
+        "equivalent_sql": null
+      },
+      "aggregation_placement": {
+        "strategy": "scan_level_aggregation",
+        "reason": "聚合函数：count；历史证据 9 条（加权 1.00，加权平均延迟 15.8 ms，相对最优比例 0.66，+0.16）；在当前信息条件下选择 scan_level_aggregation（score 0.7642）。",
+        "confidence": 0.82,
+        "equivalent_sql": null
+      }
+    },
+    "selected_strategy": {
+      "strategy_id": "time_pruning=not_applicable|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+      "strategy_parameters": {},
+      "equivalent_sql": "SELECT count(s_337), count(s_437) FROM root.dbs.g_0.d_8, root.dbs.g_0.d_9 WHERE root.dbs.g_0.d_8.s_337 > -1 AND root.dbs.g_0.d_8.s_437 > -1 AND root.dbs.g_0.d_9.s_337 > -1 AND root.dbs.g_0.d_9.s_437 > -1"
+    },
+    "evidence": {
+      "query_features": [
+        "filter.non_time_filter_count=4",
+        "aggregation.has_aggregation=true"
+      ],
+      "database_state": [
+        "database_state.data_scale_level=small"
+      ],
+      "system_state": [
+        "system_state 未提供（视为 unknown）"
+      ],
+      "historical_records": [
+        {
+          "record_id": "rec00000031",
+          "similarity": 0.8303,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000032",
+          "similarity": 0.8303,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000033",
+          "similarity": 0.8303,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000029",
+          "similarity": 0.6913,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000026",
+          "similarity": 0.6282,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000027",
+          "similarity": 0.6282,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000028",
+          "similarity": 0.6282,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000030",
+          "similarity": 0.6282,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000006",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000007",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000008",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000009",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000010",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000014",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000021",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000022",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000023",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000024",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000025",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": null,
+          "summary": {
+            "considered": 33,
+            "used": 19,
+            "below_similarity_threshold": 14,
+            "invalid": 0
+          }
+        }
+      ]
+    },
+    "overall_confidence": 0.75,
+    "fallback_strategy": "",
+    "decision_status": "success",
+    "notes": [
+      "排除 device_tag_first：风险门控未通过（缺少足够的支撑信号/历史证据）",
+      "14 条历史记录与当前上下文相似度低于阈值 （0.5），未参与决策"
+    ]
+  },
+  "execution": {
+    "execution_status": "success",
+    "failure_reason": null,
+    "metrics": {
+      "response_time_ms": 20.58,
+      "cpu_utilization": 0.025,
+      "memory_utilization": 0.161
+    },
+    "baseline_metrics": {
+      "response_time_ms": 18.75,
+      "cpu_utilization": 0.062,
+      "memory_utilization": 0.161
+    },
+    "timestamp": 1789628791787
+  },
+  "monitoring": {
+    "query_id": "dbs_q5_3",
+    "strategy_id": "time_pruning=not_applicable|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+    "execution_status": "success",
+    "failure_reason": null,
+    "metrics": {
+      "response_time_ms": 20.58,
+      "p50_latency_ms": null,
+      "p95_latency_ms": null,
+      "p99_latency_ms": null,
+      "throughput": null,
+      "cpu_utilization": 0.025,
+      "memory_utilization": 0.161,
+      "io_throughput": null
+    },
+    "baseline_comparison": {
+      "available": true,
+      "latency_change_percent": 9.76,
+      "p95_change_percent": null,
+      "p99_change_percent": null,
+      "throughput_change_percent": null,
+      "cpu_change_percent": -59.68,
+      "memory_change_percent": 0.0,
+      "io_change_percent": null
+    },
+    "performance_change": [
+      "latency_increase",
+      "cpu_decrease"
+    ],
+    "performance_assessment": "degraded",
+    "anomalies": [],
+    "feedback": {
+      "strategy_effective": false,
+      "confidence": 0.7,
+      "assessment_basis": [
+        "response_time_ms: 实测 20.58 ms vs baseline（变化 9.76%）"
+      ],
+      "scope": "single_execution"
+    },
+    "notes": []
+  },
+  "knowledge_update": {
+    "update_type": "new_record",
+    "record_id": "rec00000034",
+    "stored": true,
+    "strategy_effect": "degraded",
+    "knowledge_update": {
+      "success_record": false,
+      "failure_record": true,
+      "strategy_priority_change": "decreased"
+    },
+    "notes": [
+      "历史记录已追加存储：rec00000034（append-only，不修改/删除既有记录）",
+      "策略 time_pruning=not_applicable|filter_order=time_first|aggregation_placement=scan_level_aggregation 累计成功率 1.0 → 0.75，优先级变化：decreased"
+    ]
+  }
+}

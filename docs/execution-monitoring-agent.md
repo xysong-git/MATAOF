@@ -94,7 +94,33 @@
 `baseline_comparison`、`performance_change`（扩展）、`performance_assessment`、
 `anomalies`、`feedback`（含扩展 `assessment_basis` / `scope`）、`notes`（扩展）。
 
-## 7. 与上下游的接口约定
+## 7. LLM 语义增强（混合增强模式）
+
+事实采集是权威；LLM 只做观测事实的复述与关联（`llm_analysis` 节）：
+
+```json
+"llm_analysis": {
+  "available": true,
+  "performance_summary": "本次执行延迟 12.3 ms，相对 baseline 降低 38.5%，CPU 利用率 0.42。",
+  "anomaly_summary": "执行失败与超时观测同时发生。",
+  "notes": []
+}
+```
+
+- `performance_summary`：性能复述（llm_generated）；
+- `anomaly_summary`：异常关联解读——只允许"同时发生/同时观测到"，**禁止因果归因**
+  与策略建议（监控只记录，不改策略）；无异常 → null；
+- **数字级防虚构校验**：LLM 输出中的每个数字（量级）必须出现在给定监控数据中，
+  出现编造数字 → 对应字段置 null + notes——"绝不虚构实验结果"落实到数字级；
+- **确定性兜底**：LLM 未启用/失败/非法输出 → `available=false` + notes，
+  事实字段完全不变；
+- 非确定性说明：`llm_analysis` 节受模型随机性影响；metrics / 判断 / 异常等
+  事实字段保持确定性。
+
+接入方式：`monitor(monitoring_input, llm=llm_client)`；客户端由共享层构造
+（`mataof/llm.py`，配置见 docs/cli.md 的 llm 节）。
+
+## 8. 与上下游的接口约定
 
 - 上游：执行层/监控接口提供实测指标与 baseline；Optimization Decision Agent 提供
   `strategy_id`（建立 Query ↔ Strategy ↔ Result 关联）；

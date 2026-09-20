@@ -1,0 +1,443 @@
+{
+  "query_id": "dbl_q5_0",
+  "query": "SELECT sum(s_1667), sum(s_1717) FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 WHERE root.dbl.g_0.d_2.s_1667 > -4 AND root.dbl.g_0.d_2.s_1717 > -4 AND root.dbl.g_0.d_3.s_1667 > -4 AND root.dbl.g_0.d_3.s_1717 > -4",
+  "analysis": {
+    "query_id": "dbl_q5_0",
+    "query": "SELECT sum(s_1667), sum(s_1717) FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 WHERE root.dbl.g_0.d_2.s_1667 > -4 AND root.dbl.g_0.d_2.s_1717 > -4 AND root.dbl.g_0.d_3.s_1667 > -4 AND root.dbl.g_0.d_3.s_1717 > -4",
+    "query_type": "complex_composite_query",
+    "query_features": {
+      "time": {
+        "has_time_filter": false,
+        "start_time": null,
+        "end_time": null,
+        "time_span": null,
+        "range_level": "unknown",
+        "time_condition_form": null,
+        "time_filter_expressions": []
+      },
+      "device": {
+        "has_device_filter": true,
+        "device_count": 2,
+        "multi_device": true,
+        "device_paths": [
+          "root.dbl.g_0.d_2",
+          "root.dbl.g_0.d_3"
+        ],
+        "device_condition_count": 2
+      },
+      "filter": {
+        "filter_count": 4,
+        "filter_types": [
+          "value",
+          "value",
+          "value",
+          "value"
+        ],
+        "selectivity": {},
+        "conditions": [
+          {
+            "expression": "root.dbl.g_0.d_2.s_1667 > -4",
+            "type": "value",
+            "column": "root.dbl.g_0.d_2.s_1667",
+            "operator": "gt",
+            "value": "-4"
+          },
+          {
+            "expression": "root.dbl.g_0.d_2.s_1717 > -4",
+            "type": "value",
+            "column": "root.dbl.g_0.d_2.s_1717",
+            "operator": "gt",
+            "value": "-4"
+          },
+          {
+            "expression": "root.dbl.g_0.d_3.s_1667 > -4",
+            "type": "value",
+            "column": "root.dbl.g_0.d_3.s_1667",
+            "operator": "gt",
+            "value": "-4"
+          },
+          {
+            "expression": "root.dbl.g_0.d_3.s_1717 > -4",
+            "type": "value",
+            "column": "root.dbl.g_0.d_3.s_1717",
+            "operator": "gt",
+            "value": "-4"
+          }
+        ],
+        "type_counts": {
+          "value": 4
+        },
+        "combination": {
+          "op": "and",
+          "left": {
+            "op": "and",
+            "left": {
+              "op": "and",
+              "left": {
+                "op": "leaf",
+                "index": 0
+              },
+              "right": {
+                "op": "leaf",
+                "index": 1
+              }
+            },
+            "right": {
+              "op": "leaf",
+              "index": 2
+            }
+          },
+          "right": {
+            "op": "leaf",
+            "index": 3
+          }
+        }
+      },
+      "aggregation": {
+        "has_aggregation": true,
+        "aggregation_functions": [
+          {
+            "function": "sum",
+            "args": [
+              "s_1667"
+            ],
+            "distinct": false,
+            "nested_in_window": false
+          },
+          {
+            "function": "sum",
+            "args": [
+              "s_1717"
+            ],
+            "distinct": false,
+            "nested_in_window": false
+          }
+        ],
+        "has_group_by": false,
+        "has_window": false,
+        "group_by_details": null,
+        "aggregation_scope": {
+          "from_paths": [
+            "root.dbl.g_0.d_2",
+            "root.dbl.g_0.d_3"
+          ],
+          "time_bounds": [
+            null,
+            null
+          ],
+          "window_range": null,
+          "has_non_time_filters": true,
+          "description": "聚合函数：sum, sum；设备范围：root.dbl.g_0.d_2, root.dbl.g_0.d_3"
+        }
+      },
+      "scan": {
+        "estimated_scan_range": null,
+        "scan_level": "unknown",
+        "possible_large_scan": true,
+        "has_obvious_filter_conditions": true,
+        "possible_large_intermediate_result": true
+      }
+    },
+    "optimization_relevant_features": {
+      "time_pruning": [],
+      "filter_order": [
+        "存在 4 个非时间过滤条件（类型分布：value×4），Filter Order 属于相关候选优化维度。"
+      ],
+      "aggregation_placement": [
+        "查询包含聚合（sum），Aggregation Placement 属于相关候选优化维度。",
+        "聚合未使用 GROUP BY，在其访问范围内整体执行，属于 Aggregation Placement 候选场景。"
+      ]
+    },
+    "unknown_features": [
+      "选择率：数据库未提供选择率数据，不做估计",
+      "预计扫描范围：unknown（未提供数据库统计信息，不自行估计）"
+    ],
+    "analysis_confidence": 0.95,
+    "schema_version": "1.0"
+  },
+  "knowledge_retrieval": {
+    "matched_count": 30,
+    "knowledge_confidence": 1.0
+  },
+  "decision": {
+    "query_id": "dbl_q5_0",
+    "decision": {
+      "time_pruning": {
+        "strategy": "not_applicable",
+        "reason": "查询无时间过滤条件，也无时间窗口分组",
+        "confidence": 0.0,
+        "equivalent_sql": null
+      },
+      "filter_order": {
+        "strategy": "time_first",
+        "reason": "非时间过滤条件 4 个；历史证据 10 条（加权 1.00，加权平均延迟 10.2 ms，相对最优比例 0.62，+0.16）；排除：device_tag_first；在当前信息条件下选择 time_first（score 0.7562）。",
+        "confidence": 0.7,
+        "equivalent_sql": null
+      },
+      "aggregation_placement": {
+        "strategy": "scan_level_aggregation",
+        "reason": "聚合函数：sum；历史证据 7 条（加权 1.00，加权平均延迟 8.2 ms，相对最优比例 0.78，+0.19）；在当前信息条件下选择 scan_level_aggregation（score 0.7939）。",
+        "confidence": 0.82,
+        "equivalent_sql": null
+      }
+    },
+    "selected_strategy": {
+      "strategy_id": "time_pruning=not_applicable|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+      "strategy_parameters": {},
+      "equivalent_sql": "SELECT sum(s_1667), sum(s_1717) FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 WHERE root.dbl.g_0.d_2.s_1667 > -4 AND root.dbl.g_0.d_2.s_1717 > -4 AND root.dbl.g_0.d_3.s_1667 > -4 AND root.dbl.g_0.d_3.s_1717 > -4"
+    },
+    "evidence": {
+      "query_features": [
+        "filter.non_time_filter_count=4",
+        "aggregation.has_aggregation=true"
+      ],
+      "database_state": [
+        "database_state.data_scale_level=large"
+      ],
+      "system_state": [
+        "system_state 未提供（视为 unknown）"
+      ],
+      "historical_records": [
+        {
+          "record_id": "rec00000026",
+          "similarity": 0.6913,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000030",
+          "similarity": 0.6913,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000027",
+          "similarity": 0.6282,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000028",
+          "similarity": 0.6282,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000029",
+          "similarity": 0.6282,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000006",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000007",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000008",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000009",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000010",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000011",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000015",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000021",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000022",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000023",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000024",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000025",
+          "similarity": 0.5334,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": null,
+          "summary": {
+            "considered": 30,
+            "used": 17,
+            "below_similarity_threshold": 13,
+            "invalid": 0
+          }
+        }
+      ]
+    },
+    "overall_confidence": 0.75,
+    "fallback_strategy": "",
+    "decision_status": "success",
+    "notes": [
+      "排除 device_tag_first：风险门控未通过（缺少足够的支撑信号/历史证据）",
+      "13 条历史记录与当前上下文相似度低于阈值 （0.5），未参与决策"
+    ]
+  },
+  "execution": {
+    "execution_status": "success",
+    "failure_reason": null,
+    "metrics": {
+      "response_time_ms": 12.94,
+      "cpu_utilization": 0.042,
+      "memory_utilization": 0.162
+    },
+    "baseline_metrics": {
+      "response_time_ms": 14.75,
+      "cpu_utilization": 0.06,
+      "memory_utilization": 0.162
+    },
+    "timestamp": 1789628796238
+  },
+  "monitoring": {
+    "query_id": "dbl_q5_0",
+    "strategy_id": "time_pruning=not_applicable|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+    "execution_status": "success",
+    "failure_reason": null,
+    "metrics": {
+      "response_time_ms": 12.94,
+      "p50_latency_ms": null,
+      "p95_latency_ms": null,
+      "p99_latency_ms": null,
+      "throughput": null,
+      "cpu_utilization": 0.042,
+      "memory_utilization": 0.162,
+      "io_throughput": null
+    },
+    "baseline_comparison": {
+      "available": true,
+      "latency_change_percent": -12.27,
+      "p95_change_percent": null,
+      "p99_change_percent": null,
+      "throughput_change_percent": null,
+      "cpu_change_percent": -30.0,
+      "memory_change_percent": 0.0,
+      "io_change_percent": null
+    },
+    "performance_change": [
+      "latency_reduction",
+      "cpu_decrease"
+    ],
+    "performance_assessment": "improved",
+    "anomalies": [],
+    "feedback": {
+      "strategy_effective": true,
+      "confidence": 0.7,
+      "assessment_basis": [
+        "response_time_ms: 实测 12.94 ms vs baseline（变化 -12.27%）"
+      ],
+      "scope": "single_execution"
+    },
+    "notes": []
+  },
+  "knowledge_update": {
+    "update_type": "new_record",
+    "record_id": "rec00000031",
+    "stored": true,
+    "strategy_effect": "improved",
+    "knowledge_update": {
+      "success_record": true,
+      "failure_record": false,
+      "strategy_priority_change": null
+    },
+    "notes": [
+      "历史记录已追加存储：rec00000031（append-only，不修改/删除既有记录）"
+    ]
+  }
+}

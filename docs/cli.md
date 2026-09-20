@@ -94,6 +94,40 @@ bash $IOTDB/sbin/start-standalone.sh     # 启动（默认 6667 端口）
 bash $IOTDB/sbin/stop-standalone.sh      # 停止
 ```
 
+## 4.2 LLM 配置（共享层，混合增强模式）
+
+配置文件的 `llm` 节（缺省 provider=none → 纯确定性路径，行为不变）：
+
+```json
+"llm": {
+  "provider": "none",                          // none | openai | local
+  "base_url": "https://api.deepseek.com/v1",   // openai 兼容端点
+  "api_key": "",                               // 或环境变量 LLM_API_KEY
+  "model": "deepseek-chat",
+  "timeout_s": 60,
+  "max_tokens": 2048,
+  "log_file": "data/llm_log.jsonl"             // 调用日志（时间/延迟/状态，不含完整内容）
+}
+```
+
+- `provider=none`：不启用（默认，确定性路径）；
+- `provider=openai`：任何 OpenAI 兼容 API（DeepSeek/OpenAI/自建 vLLM）；
+- `provider=local`：本地推理服务（POST `{"messages", "max_tokens"}` → `{"text"}`，
+  与 MAPO 的 FastAPI 服务形式一致）；
+- **失败即兜底**：LLM 不可用/超时/输出非法 → Agent 自动回退确定性规则，
+  绝不中断链路；调用统计写入 `log_file`（JSONL）。
+
+当前四个 Agent 均已接入 LLM 增强（统一模式：确定性核心权威 + LLM 只写
+`llm_analysis` 附加节 + 失败即兜底）：
+- Query Analysis：语义摘要 / 类型提示 / 标签属性判别建议；
+- Optimization Decision：决策解读（semantic_reason）/ 候选偏好（preferences，
+  严格限于候选集合）；`llm` 节可加 `"preference_bonus": true` 开启实验性偏好加分
+  （+0.05，不参与风险门控，默认关闭）；
+- Knowledge Memory：检索解读（semantic_summary，禁止策略建议）/ 经验总结
+  （experience_note，随记录存为 `llm_note` 元数据字段）；
+- Execution Monitoring：性能复述 / 异常关联解读（禁因果归因、禁建议），
+  **数字级防虚构校验**（LLM 输出数字必须 ⊆ 给定监控数据）。
+
 ## 5. 编程入口（PipelineRunner）
 
 ```python

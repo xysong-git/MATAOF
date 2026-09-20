@@ -29,6 +29,11 @@ from typing import Optional
 from mataof.agents.knowledge_memory.store import MemoryStore
 from mataof.agents.knowledge_memory.record import assemble_record
 from mataof.agents.knowledge_memory.retrieval import retrieve as _retrieve
+from mataof.agents.knowledge_memory.llm_enhance import (
+    build_retrieve_llm_analysis,
+    build_update_llm_analysis,
+    request_experience_note,
+)
 
 # 策略优先级变化判定阈值（累计成功率变化超过该值才报告方向）
 PRIORITY_CHANGE_DELTA = 0.1
@@ -40,9 +45,15 @@ class KnowledgeMemoryAgent:
     name = "knowledge_memory"
     description = "历史查询/策略/执行结果的结构化存储、检索、关联与更新。"
 
-    def __init__(self, store_path: Optional[str] = None):
-        """store_path=None 时仅内存保存；给定路径时 JSON 持久化。"""
+    def __init__(self, store_path: Optional[str] = None,
+                 llm: Optional[object] = None):
+        """store_path=None 时仅内存保存；给定路径时 JSON 持久化。
+
+        llm：可选 LLMClient（混合增强模式）——只生成 llm_analysis 附加节与
+        经验总结（llm_note），不影响检索与入库的确定性核心；失败自动兜底。
+        """
         self.store = MemoryStore(store_path)
+        self.llm = llm
 
     # ------------------------------------------------------------------
     # 检索
@@ -50,7 +61,10 @@ class KnowledgeMemoryAgent:
     def retrieve(self, query_analysis: dict, database_state: Optional[dict] = None,
                  system_state: Optional[dict] = None, query_id: str = "") -> dict:
         """检索与当前查询上下文相关的历史知识（三层匹配 + 汇总 + 模式）。"""
-        return _retrieve(self.store, query_analysis, database_state, system_state, query_id)
+        result = _retrieve(self.store, query_analysis, database_state, system_state, query_id)
+        result["llm_analysis"] = build_retrieve_llm_analysis(
+            self.llm, result, query_analysis)
+        return result
 
     # ------------------------------------------------------------------
     # 更新（反馈入库）
@@ -75,7 +89,18 @@ class KnowledgeMemoryAgent:
                     "strategy_priority_change": None,
                 },
                 "notes": notes,
+                "llm_analysis": {"available": False, "experience_note": None,
+                                 "notes": ["LLM 未启用或记录未入库"]},
             }
+
+        # LLM 经验总结（llm_generated 元数据；失败 → 不写入，事实记录不变）
+        effect = record["execution_result"]
+        llm_notes: list[str] = []
+        experience_note = request_experience_note(self.llm, feedback_input,
+                                                  {"stored": True, "strategy_effect": effect},
+                                                  llm_notes)
+        if experience_note is not None:
+            record["llm_note"] = experience_note
 
         # 累计统计（入库前 vs 入库后）——历史样本保留，评价随累计更新
         sid = record["strategy"]["strategy_id"]
@@ -84,7 +109,6 @@ class KnowledgeMemoryAgent:
         after = self.store.statistics().get(sid, {})
         notes.extend(self._post_store_notes(record_id))
 
-        effect = record["execution_result"]
         failure_record = (
             effect in ("degraded", "failed")
             or record["execution"]["status"] in ("failed", "timeout")
@@ -116,6 +140,7 @@ class KnowledgeMemoryAgent:
                 "strategy_priority_change": priority_change,
             },
             "notes": notes,
+            "llm_analysis": build_update_llm_analysis(experience_note, llm_notes),
         }
 
     def _post_store_notes(self, record_id: str) -> list:

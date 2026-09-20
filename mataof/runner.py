@@ -29,6 +29,23 @@ from mataof.agents.execution_monitoring import monitor
 from mataof.agents.knowledge_memory import KnowledgeMemoryAgent
 from mataof.executors import build_executor
 from mataof.executors.base import ExecutionResult, Executor
+from mataof.llm import build_llm_client
+
+
+def split_sql_statements(text: str) -> list[str]:
+    """按分号拆分语句，去掉 `--` 行注释与空行。
+
+    查询集文件的注释是标注，不是可执行 SQL（IoTDB 不接受前导 `--`），
+    拆分时一律去除，保证交给分析与执行的文本是干净的语句。
+    """
+    out: list[str] = []
+    for raw in text.split(";"):
+        lines = [l for l in raw.splitlines()
+                 if l.strip() and not l.strip().startswith("--")]
+        stmt = "\n".join(lines).strip()
+        if stmt:
+            out.append(stmt)
+    return out
 
 
 @dataclass
@@ -44,6 +61,7 @@ class RunnerConfig:
     baseline_strategy: Any = None
     thresholds: dict = field(default_factory=dict)
     reference_time: Optional[int] = None        # 历史时效衰减参考时间
+    llm: Optional[dict] = None                  # LLM 配置（mataof/llm.py；None → 不启用）
 
 
 class PipelineRunner:
@@ -62,7 +80,8 @@ class PipelineRunner:
 
     def __init__(self, config: RunnerConfig):
         self.config = config
-        self.km = KnowledgeMemoryAgent(store_path=config.knowledge_store)
+        self.llm = build_llm_client(config.llm)   # None → 确定性路径（兜底）
+        self.km = KnowledgeMemoryAgent(store_path=config.knowledge_store, llm=self.llm)
         self.executor: Executor = build_executor(config.executor)
         self._seq = 0
 
@@ -75,14 +94,14 @@ class PipelineRunner:
         if not query_id:
             query_id = f"query-{self._seq:04d}"
 
-        # 1. 分析
-        analysis = analyze(query, query_id=query_id)
+        # 1. 分析（LLM 增强可选；不可用自动回退确定性路径）
+        analysis = analyze(query, query_id=query_id, llm=self.llm)
         # 2. 知识检索（历史证据）
         km_result = self.km.retrieve(
             analysis, database_state=self.config.database_state,
             system_state=self.config.system_state, query_id=query_id,
         )
-        # 3. 决策
+        # 3. 决策（LLM 增强可选；bonus 开关来自配置 llm 节）
         decision = decide({
             "query_id": query_id,
             "query_analysis": analysis,
@@ -92,12 +111,13 @@ class PipelineRunner:
             "candidate_strategies": self.config.candidate_strategies,
             "baseline_strategy": self.config.baseline_strategy,
             "reference_time": self.config.reference_time,
-        })
+            "llm_preference_bonus": bool((self.config.llm or {}).get("preference_bonus")),
+        }, llm=self.llm)
         # 4. 执行（真实执行层；NullExecutor 时不产生任何指标）
         execution: ExecutionResult = self.executor.execute(
             query, query_id, decision.get("selected_strategy") or {}
         )
-        # 5. 监控（事实采集）
+        # 5. 监控（事实采集；LLM 增强可选）
         feedback = monitor({
             "query_id": query_id,
             "strategy_id": (decision.get("selected_strategy") or {}).get("strategy_id") or "",
@@ -106,7 +126,7 @@ class PipelineRunner:
             "metrics": execution.metrics,
             "baseline_metrics": execution.baseline_metrics,
             "thresholds": self.config.thresholds or None,
-        })
+        }, llm=self.llm)
         # 6. 知识更新
         knowledge_update = self.km.update({
             "query_id": query_id,
@@ -160,7 +180,7 @@ class PipelineRunner:
             return traces
         with open(path, encoding="utf-8") as f:
             text = f.read()
-        for stmt in [s.strip() for s in text.split(";") if s.strip()]:
+        for stmt in split_sql_statements(text):
             traces.append(self.run_query(stmt))
         return traces
 
@@ -224,4 +244,5 @@ def load_config_file(path: str) -> RunnerConfig:
         baseline_strategy=data.get("baseline_strategy"),
         thresholds=data.get("thresholds") or {},
         reference_time=data.get("reference_time"),
+        llm=data.get("llm"),
     )

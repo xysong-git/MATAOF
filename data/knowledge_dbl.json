@@ -1,0 +1,3923 @@
+{
+  "version": 1,
+  "next_seq": 58,
+  "records": {
+    "rec00000001": {
+      "query_record": {
+        "query_id": "dbl_q1_0",
+        "query": "SELECT s_1210, s_2210 FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 WHERE time = 1640966750000",
+        "query_features": {
+          "query_type": "point_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 0,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640966750000,
+            "end_time": 1640966750000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 10.61,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.077,
+          "memory_utilization": 0.161,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795111,
+      "record_id": "rec00000001"
+    },
+    "rec00000002": {
+      "query_record": {
+        "query_id": "dbl_q1_1",
+        "query": "SELECT s_1220, s_2220 FROM root.dbl.g_0.d_4, root.dbl.g_0.d_5 WHERE time = 1640967050000",
+        "query_features": {
+          "query_type": "point_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 0,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967050000,
+            "end_time": 1640967050000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 11.4,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.184,
+          "memory_utilization": 0.161,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795161,
+      "record_id": "rec00000002"
+    },
+    "rec00000003": {
+      "query_record": {
+        "query_id": "dbl_q1_2",
+        "query": "SELECT s_1230, s_2230 FROM root.dbl.g_0.d_6, root.dbl.g_0.d_7 WHERE time = 1640967350000",
+        "query_features": {
+          "query_type": "point_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 0,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967350000,
+            "end_time": 1640967350000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 9.29,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.19,
+          "memory_utilization": 0.161,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795203,
+      "record_id": "rec00000003"
+    },
+    "rec00000004": {
+      "query_record": {
+        "query_id": "dbl_q1_3",
+        "query": "SELECT s_1240, s_2240 FROM root.dbl.g_0.d_8, root.dbl.g_0.d_9 WHERE time = 1640967650000",
+        "query_features": {
+          "query_type": "point_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 0,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967650000,
+            "end_time": 1640967650000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 8.3,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.11,
+          "memory_utilization": 0.161,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795249,
+      "record_id": "rec00000004"
+    },
+    "rec00000005": {
+      "query_record": {
+        "query_id": "dbl_q1_4",
+        "query": "SELECT s_1250, s_2250 FROM root.dbl.g_0.d_10, root.dbl.g_0.d_11 WHERE time = 1640967950000",
+        "query_features": {
+          "query_type": "point_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 0,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967950000,
+            "end_time": 1640967950000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.89,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.073,
+          "memory_utilization": 0.161,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795287,
+      "record_id": "rec00000005"
+    },
+    "rec00000006": {
+      "query_record": {
+        "query_id": "dbl_q10_0",
+        "query": "SELECT s_1667, s_1717 FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 WHERE time >= 1640966700000 AND time <= 1640966950000 AND root.dbl.g_0.d_2.s_1667 > -4 AND root.dbl.g_0.d_2.s_1717 > -4 AND root.dbl.g_0.d_3.s_1667 > -4 AND root.dbl.g_0.d_3.s_1717 > -4 ORDER BY time DESC",
+        "query_features": {
+          "query_type": "predicate_filter_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640966700000,
+            "end_time": 1640966950000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 11.04,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.067,
+          "memory_utilization": 0.161,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795332,
+      "record_id": "rec00000006"
+    },
+    "rec00000007": {
+      "query_record": {
+        "query_id": "dbl_q10_1",
+        "query": "SELECT s_1668, s_1718 FROM root.dbl.g_0.d_4, root.dbl.g_0.d_5 WHERE time >= 1640967000000 AND time <= 1640967250000 AND root.dbl.g_0.d_4.s_1668 > -3 AND root.dbl.g_0.d_4.s_1718 > -3 AND root.dbl.g_0.d_5.s_1668 > -3 AND root.dbl.g_0.d_5.s_1718 > -3 ORDER BY time DESC",
+        "query_features": {
+          "query_type": "predicate_filter_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967000000,
+            "end_time": 1640967250000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 11.93,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.041,
+          "memory_utilization": 0.161,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795377,
+      "record_id": "rec00000007"
+    },
+    "rec00000008": {
+      "query_record": {
+        "query_id": "dbl_q10_2",
+        "query": "SELECT s_1669, s_1719 FROM root.dbl.g_0.d_6, root.dbl.g_0.d_7 WHERE time >= 1640967300000 AND time <= 1640967550000 AND root.dbl.g_0.d_6.s_1669 > -2 AND root.dbl.g_0.d_6.s_1719 > -2 AND root.dbl.g_0.d_7.s_1669 > -2 AND root.dbl.g_0.d_7.s_1719 > -2 ORDER BY time DESC",
+        "query_features": {
+          "query_type": "predicate_filter_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967300000,
+            "end_time": 1640967550000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 11.02,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.053,
+          "memory_utilization": 0.161,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795424,
+      "record_id": "rec00000008"
+    },
+    "rec00000009": {
+      "query_record": {
+        "query_id": "dbl_q10_3",
+        "query": "SELECT s_1670, s_1720 FROM root.dbl.g_0.d_8, root.dbl.g_0.d_9 WHERE time >= 1640967600000 AND time <= 1640967850000 AND root.dbl.g_0.d_8.s_1670 > -1 AND root.dbl.g_0.d_8.s_1720 > -1 AND root.dbl.g_0.d_9.s_1670 > -1 AND root.dbl.g_0.d_9.s_1720 > -1 ORDER BY time DESC",
+        "query_features": {
+          "query_type": "predicate_filter_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967600000,
+            "end_time": 1640967850000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 6.4,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.052,
+          "memory_utilization": 0.161,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795467,
+      "record_id": "rec00000009"
+    },
+    "rec00000010": {
+      "query_record": {
+        "query_id": "dbl_q10_4",
+        "query": "SELECT s_1671, s_1721 FROM root.dbl.g_0.d_10, root.dbl.g_0.d_11 WHERE time >= 1640967900000 AND time <= 1640968150000 AND root.dbl.g_0.d_10.s_1671 > -5 AND root.dbl.g_0.d_10.s_1721 > -5 AND root.dbl.g_0.d_11.s_1671 > -5 AND root.dbl.g_0.d_11.s_1721 > -5 ORDER BY time DESC",
+        "query_features": {
+          "query_type": "predicate_filter_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967900000,
+            "end_time": 1640968150000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 12.32,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.058,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795504,
+      "record_id": "rec00000010"
+    },
+    "rec00000011": {
+      "query_record": {
+        "query_id": "dbl_q11_0",
+        "query": "SELECT sum(s_1667), sum(s_1717) FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 WHERE time >= 1640966700000 AND time <= 1640966950000 GROUP BY ([1640966700000, 1640966950000),20000ms) ORDER BY time DESC",
+        "query_features": {
+          "query_type": "window_aggregation_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": true,
+            "has_window": true,
+            "functions": [
+              "sum"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640966700000,
+            "end_time": 1640966950000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 10.98,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.06,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795552,
+      "record_id": "rec00000011"
+    },
+    "rec00000012": {
+      "query_record": {
+        "query_id": "dbl_q11_1",
+        "query": "SELECT max_value(s_1668), max_value(s_1718) FROM root.dbl.g_0.d_4, root.dbl.g_0.d_5 WHERE time >= 1640967000000 AND time <= 1640967250000 GROUP BY ([1640967000000, 1640967250000),20000ms) ORDER BY time DESC",
+        "query_features": {
+          "query_type": "window_aggregation_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": true,
+            "has_window": true,
+            "functions": [
+              "max_value"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967000000,
+            "end_time": 1640967250000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 10.47,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.044,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795588,
+      "record_id": "rec00000012"
+    },
+    "rec00000013": {
+      "query_record": {
+        "query_id": "dbl_q11_2",
+        "query": "SELECT min_value(s_1669), min_value(s_1719) FROM root.dbl.g_0.d_6, root.dbl.g_0.d_7 WHERE time >= 1640967300000 AND time <= 1640967550000 GROUP BY ([1640967300000, 1640967550000),20000ms) ORDER BY time DESC",
+        "query_features": {
+          "query_type": "window_aggregation_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": true,
+            "has_window": true,
+            "functions": [
+              "min_value"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967300000,
+            "end_time": 1640967550000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 9.62,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.032,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795620,
+      "record_id": "rec00000013"
+    },
+    "rec00000014": {
+      "query_record": {
+        "query_id": "dbl_q11_3",
+        "query": "SELECT count(s_1670), count(s_1720) FROM root.dbl.g_0.d_8, root.dbl.g_0.d_9 WHERE time >= 1640967600000 AND time <= 1640967850000 GROUP BY ([1640967600000, 1640967850000),20000ms) ORDER BY time DESC",
+        "query_features": {
+          "query_type": "window_aggregation_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": true,
+            "has_window": true,
+            "functions": [
+              "count"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967600000,
+            "end_time": 1640967850000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 9.72,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.06,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795652,
+      "record_id": "rec00000014"
+    },
+    "rec00000015": {
+      "query_record": {
+        "query_id": "dbl_q11_4",
+        "query": "SELECT sum(s_1671), sum(s_1721) FROM root.dbl.g_0.d_10, root.dbl.g_0.d_11 WHERE time >= 1640967900000 AND time <= 1640968150000 GROUP BY ([1640967900000, 1640968150000),20000ms) ORDER BY time DESC",
+        "query_features": {
+          "query_type": "window_aggregation_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": true,
+            "has_window": true,
+            "functions": [
+              "sum"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967900000,
+            "end_time": 1640968150000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 9.41,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.079,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795689,
+      "record_id": "rec00000015"
+    },
+    "rec00000016": {
+      "query_record": {
+        "query_id": "dbl_q2_0",
+        "query": "SELECT s_1210, s_2210 FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 WHERE time >= 1640966700000 AND time <= 1640966950000",
+        "query_features": {
+          "query_type": "range_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640966700000,
+            "end_time": 1640966950000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 9.45,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.094,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795722,
+      "record_id": "rec00000016"
+    },
+    "rec00000017": {
+      "query_record": {
+        "query_id": "dbl_q2_1",
+        "query": "SELECT s_1220, s_2220 FROM root.dbl.g_0.d_4, root.dbl.g_0.d_5 WHERE time >= 1640967000000 AND time <= 1640967250000",
+        "query_features": {
+          "query_type": "range_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967000000,
+            "end_time": 1640967250000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 9.25,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.034,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795753,
+      "record_id": "rec00000017"
+    },
+    "rec00000018": {
+      "query_record": {
+        "query_id": "dbl_q2_2",
+        "query": "SELECT s_1230, s_2230 FROM root.dbl.g_0.d_6, root.dbl.g_0.d_7 WHERE time >= 1640967300000 AND time <= 1640967550000",
+        "query_features": {
+          "query_type": "range_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967300000,
+            "end_time": 1640967550000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 9.43,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.049,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795783,
+      "record_id": "rec00000018"
+    },
+    "rec00000019": {
+      "query_record": {
+        "query_id": "dbl_q2_3",
+        "query": "SELECT s_1240, s_2240 FROM root.dbl.g_0.d_8, root.dbl.g_0.d_9 WHERE time >= 1640967600000 AND time <= 1640967850000",
+        "query_features": {
+          "query_type": "range_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967600000,
+            "end_time": 1640967850000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 10.2,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.017,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "degraded",
+      "anomalies": [],
+      "experience": {
+        "effect": "degraded",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795814,
+      "record_id": "rec00000019"
+    },
+    "rec00000020": {
+      "query_record": {
+        "query_id": "dbl_q2_4",
+        "query": "SELECT s_1250, s_2250 FROM root.dbl.g_0.d_10, root.dbl.g_0.d_11 WHERE time >= 1640967900000 AND time <= 1640968150000",
+        "query_features": {
+          "query_type": "range_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967900000,
+            "end_time": 1640968150000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 9.91,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.065,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795846,
+      "record_id": "rec00000020"
+    },
+    "rec00000021": {
+      "query_record": {
+        "query_id": "dbl_q3_0",
+        "query": "SELECT s_1667, s_1717 FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 WHERE time >= 1640966700000 AND time <= 1640966950000 AND root.dbl.g_0.d_2.s_1667 > -4 AND root.dbl.g_0.d_2.s_1717 > -4 AND root.dbl.g_0.d_3.s_1667 > -4 AND root.dbl.g_0.d_3.s_1717 > -4",
+        "query_features": {
+          "query_type": "predicate_filter_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640966700000,
+            "end_time": 1640966950000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 10.94,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.041,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795885,
+      "record_id": "rec00000021"
+    },
+    "rec00000022": {
+      "query_record": {
+        "query_id": "dbl_q3_1",
+        "query": "SELECT s_1668, s_1718 FROM root.dbl.g_0.d_4, root.dbl.g_0.d_5 WHERE time >= 1640967000000 AND time <= 1640967250000 AND root.dbl.g_0.d_4.s_1668 > -3 AND root.dbl.g_0.d_4.s_1718 > -3 AND root.dbl.g_0.d_5.s_1668 > -3 AND root.dbl.g_0.d_5.s_1718 > -3",
+        "query_features": {
+          "query_type": "predicate_filter_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967000000,
+            "end_time": 1640967250000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 10.15,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.058,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795923,
+      "record_id": "rec00000022"
+    },
+    "rec00000023": {
+      "query_record": {
+        "query_id": "dbl_q3_2",
+        "query": "SELECT s_1669, s_1719 FROM root.dbl.g_0.d_6, root.dbl.g_0.d_7 WHERE time >= 1640967300000 AND time <= 1640967550000 AND root.dbl.g_0.d_6.s_1669 > -2 AND root.dbl.g_0.d_6.s_1719 > -2 AND root.dbl.g_0.d_7.s_1669 > -2 AND root.dbl.g_0.d_7.s_1719 > -2",
+        "query_features": {
+          "query_type": "predicate_filter_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967300000,
+            "end_time": 1640967550000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 11.28,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.031,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "degraded",
+      "anomalies": [],
+      "experience": {
+        "effect": "degraded",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628795961,
+      "record_id": "rec00000023"
+    },
+    "rec00000024": {
+      "query_record": {
+        "query_id": "dbl_q3_3",
+        "query": "SELECT s_1670, s_1720 FROM root.dbl.g_0.d_8, root.dbl.g_0.d_9 WHERE time >= 1640967600000 AND time <= 1640967850000 AND root.dbl.g_0.d_8.s_1670 > -1 AND root.dbl.g_0.d_8.s_1720 > -1 AND root.dbl.g_0.d_9.s_1670 > -1 AND root.dbl.g_0.d_9.s_1720 > -1",
+        "query_features": {
+          "query_type": "predicate_filter_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967600000,
+            "end_time": 1640967850000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 6.38,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.022,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796000,
+      "record_id": "rec00000024"
+    },
+    "rec00000025": {
+      "query_record": {
+        "query_id": "dbl_q3_4",
+        "query": "SELECT s_1671, s_1721 FROM root.dbl.g_0.d_10, root.dbl.g_0.d_11 WHERE time >= 1640967900000 AND time <= 1640968150000 AND root.dbl.g_0.d_10.s_1671 > -5 AND root.dbl.g_0.d_10.s_1721 > -5 AND root.dbl.g_0.d_11.s_1671 > -5 AND root.dbl.g_0.d_11.s_1721 > -5",
+        "query_features": {
+          "query_type": "predicate_filter_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967900000,
+            "end_time": 1640968150000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 10.65,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.068,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796031,
+      "record_id": "rec00000025"
+    },
+    "rec00000026": {
+      "query_record": {
+        "query_id": "dbl_q4_0",
+        "query": "SELECT sum(s_1667), sum(s_1717) FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 WHERE time >= 1640966700000 AND time <= 1640966950000",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "sum"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640966700000,
+            "end_time": 1640966950000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.46,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.069,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796070,
+      "record_id": "rec00000026"
+    },
+    "rec00000027": {
+      "query_record": {
+        "query_id": "dbl_q4_1",
+        "query": "SELECT max_value(s_1668), max_value(s_1718) FROM root.dbl.g_0.d_4, root.dbl.g_0.d_5 WHERE time >= 1640967000000 AND time <= 1640967250000",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "max_value"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967000000,
+            "end_time": 1640967250000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.23,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.089,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "degraded",
+      "anomalies": [],
+      "experience": {
+        "effect": "degraded",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796102,
+      "record_id": "rec00000027"
+    },
+    "rec00000028": {
+      "query_record": {
+        "query_id": "dbl_q4_2",
+        "query": "SELECT min_value(s_1669), min_value(s_1719) FROM root.dbl.g_0.d_6, root.dbl.g_0.d_7 WHERE time >= 1640967300000 AND time <= 1640967550000",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "min_value"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967300000,
+            "end_time": 1640967550000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.81,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.039,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796133,
+      "record_id": "rec00000028"
+    },
+    "rec00000029": {
+      "query_record": {
+        "query_id": "dbl_q4_3",
+        "query": "SELECT count(s_1670), count(s_1720) FROM root.dbl.g_0.d_8, root.dbl.g_0.d_9 WHERE time >= 1640967600000 AND time <= 1640967850000",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "count"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967600000,
+            "end_time": 1640967850000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.43,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.105,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796167,
+      "record_id": "rec00000029"
+    },
+    "rec00000030": {
+      "query_record": {
+        "query_id": "dbl_q4_4",
+        "query": "SELECT sum(s_1671), sum(s_1721) FROM root.dbl.g_0.d_10, root.dbl.g_0.d_11 WHERE time >= 1640967900000 AND time <= 1640968150000",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "sum"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967900000,
+            "end_time": 1640968150000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.97,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.07,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796201,
+      "record_id": "rec00000030"
+    },
+    "rec00000031": {
+      "query_record": {
+        "query_id": "dbl_q5_0",
+        "query": "SELECT sum(s_1667), sum(s_1717) FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 WHERE root.dbl.g_0.d_2.s_1667 > -4 AND root.dbl.g_0.d_2.s_1717 > -4 AND root.dbl.g_0.d_3.s_1667 > -4 AND root.dbl.g_0.d_3.s_1717 > -4",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "sum"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=not_applicable|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "not_applicable",
+          "filter_order": "time_first",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 12.94,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.042,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796238,
+      "record_id": "rec00000031"
+    },
+    "rec00000032": {
+      "query_record": {
+        "query_id": "dbl_q5_1",
+        "query": "SELECT max_value(s_1668), max_value(s_1718) FROM root.dbl.g_0.d_4, root.dbl.g_0.d_5 WHERE root.dbl.g_0.d_4.s_1668 > -3 AND root.dbl.g_0.d_4.s_1718 > -3 AND root.dbl.g_0.d_5.s_1668 > -3 AND root.dbl.g_0.d_5.s_1718 > -3",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "max_value"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=not_applicable|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "not_applicable",
+          "filter_order": "time_first",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 10.68,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.052,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796284,
+      "record_id": "rec00000032"
+    },
+    "rec00000033": {
+      "query_record": {
+        "query_id": "dbl_q5_2",
+        "query": "SELECT min_value(s_1669), min_value(s_1719) FROM root.dbl.g_0.d_6, root.dbl.g_0.d_7 WHERE root.dbl.g_0.d_6.s_1669 > -2 AND root.dbl.g_0.d_6.s_1719 > -2 AND root.dbl.g_0.d_7.s_1669 > -2 AND root.dbl.g_0.d_7.s_1719 > -2",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "min_value"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=not_applicable|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "not_applicable",
+          "filter_order": "time_first",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 11.48,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.11,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796326,
+      "record_id": "rec00000033"
+    },
+    "rec00000034": {
+      "query_record": {
+        "query_id": "dbl_q5_3",
+        "query": "SELECT count(s_1670), count(s_1720) FROM root.dbl.g_0.d_8, root.dbl.g_0.d_9 WHERE root.dbl.g_0.d_8.s_1670 > -1 AND root.dbl.g_0.d_8.s_1720 > -1 AND root.dbl.g_0.d_9.s_1670 > -1 AND root.dbl.g_0.d_9.s_1720 > -1",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "count"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=not_applicable|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "not_applicable",
+          "filter_order": "time_first",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 8.41,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.054,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796362,
+      "record_id": "rec00000034"
+    },
+    "rec00000035": {
+      "query_record": {
+        "query_id": "dbl_q5_4",
+        "query": "SELECT sum(s_1671), sum(s_1721) FROM root.dbl.g_0.d_10, root.dbl.g_0.d_11 WHERE root.dbl.g_0.d_10.s_1671 > -5 AND root.dbl.g_0.d_10.s_1721 > -5 AND root.dbl.g_0.d_11.s_1671 > -5 AND root.dbl.g_0.d_11.s_1721 > -5",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "sum"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=not_applicable|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "not_applicable",
+          "filter_order": "time_first",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 10.67,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.058,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796399,
+      "record_id": "rec00000035"
+    },
+    "rec00000036": {
+      "query_record": {
+        "query_id": "dbl_q6_0",
+        "query": "SELECT sum(s_1667), sum(s_1717) FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 WHERE time >= 1640966700000 AND time <= 1640966950000 AND root.dbl.g_0.d_2.s_1667 > -4 AND root.dbl.g_0.d_2.s_1717 > -4 AND root.dbl.g_0.d_3.s_1667 > -4 AND root.dbl.g_0.d_3.s_1717 > -4",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "sum"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640966700000,
+            "end_time": 1640966950000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.95,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.088,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796446,
+      "record_id": "rec00000036"
+    },
+    "rec00000037": {
+      "query_record": {
+        "query_id": "dbl_q6_1",
+        "query": "SELECT max_value(s_1668), max_value(s_1718) FROM root.dbl.g_0.d_4, root.dbl.g_0.d_5 WHERE time >= 1640967000000 AND time <= 1640967250000 AND root.dbl.g_0.d_4.s_1668 > -3 AND root.dbl.g_0.d_4.s_1718 > -3 AND root.dbl.g_0.d_5.s_1668 > -3 AND root.dbl.g_0.d_5.s_1718 > -3",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "max_value"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967000000,
+            "end_time": 1640967250000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.94,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.083,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "degraded",
+      "anomalies": [],
+      "experience": {
+        "effect": "degraded",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796485,
+      "record_id": "rec00000037"
+    },
+    "rec00000038": {
+      "query_record": {
+        "query_id": "dbl_q6_2",
+        "query": "SELECT min_value(s_1669), min_value(s_1719) FROM root.dbl.g_0.d_6, root.dbl.g_0.d_7 WHERE time >= 1640967300000 AND time <= 1640967550000 AND root.dbl.g_0.d_6.s_1669 > -2 AND root.dbl.g_0.d_6.s_1719 > -2 AND root.dbl.g_0.d_7.s_1669 > -2 AND root.dbl.g_0.d_7.s_1719 > -2",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "min_value"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967300000,
+            "end_time": 1640967550000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.26,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.075,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796523,
+      "record_id": "rec00000038"
+    },
+    "rec00000039": {
+      "query_record": {
+        "query_id": "dbl_q6_3",
+        "query": "SELECT count(s_1670), count(s_1720) FROM root.dbl.g_0.d_8, root.dbl.g_0.d_9 WHERE time >= 1640967600000 AND time <= 1640967850000 AND root.dbl.g_0.d_8.s_1670 > -1 AND root.dbl.g_0.d_8.s_1720 > -1 AND root.dbl.g_0.d_9.s_1670 > -1 AND root.dbl.g_0.d_9.s_1720 > -1",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "count"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967600000,
+            "end_time": 1640967850000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 6.47,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.075,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "degraded",
+      "anomalies": [],
+      "experience": {
+        "effect": "degraded",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796562,
+      "record_id": "rec00000039"
+    },
+    "rec00000040": {
+      "query_record": {
+        "query_id": "dbl_q6_4",
+        "query": "SELECT sum(s_1671), sum(s_1721) FROM root.dbl.g_0.d_10, root.dbl.g_0.d_11 WHERE time >= 1640967900000 AND time <= 1640968150000 AND root.dbl.g_0.d_10.s_1671 > -5 AND root.dbl.g_0.d_10.s_1721 > -5 AND root.dbl.g_0.d_11.s_1671 > -5 AND root.dbl.g_0.d_11.s_1721 > -5",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "sum"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967900000,
+            "end_time": 1640968150000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.25,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.0,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796597,
+      "record_id": "rec00000040"
+    },
+    "rec00000041": {
+      "query_record": {
+        "query_id": "dbl_q7_0",
+        "query": "SELECT count(s_1210), count(s_2210) FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 GROUP BY ([1640966700000, 1640966950000),20000ms)",
+        "query_features": {
+          "query_type": "window_aggregation_query",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": true,
+            "has_window": true,
+            "functions": [
+              "count"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=full_scan|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "full_scan",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.96,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.039,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796634,
+      "record_id": "rec00000041"
+    },
+    "rec00000042": {
+      "query_record": {
+        "query_id": "dbl_q7_1",
+        "query": "SELECT count(s_1220), count(s_2220) FROM root.dbl.g_0.d_4, root.dbl.g_0.d_5 GROUP BY ([1640967000000, 1640967250000),20000ms)",
+        "query_features": {
+          "query_type": "window_aggregation_query",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": true,
+            "has_window": true,
+            "functions": [
+              "count"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=full_scan|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "full_scan",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 8.03,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.077,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796666,
+      "record_id": "rec00000042"
+    },
+    "rec00000043": {
+      "query_record": {
+        "query_id": "dbl_q7_2",
+        "query": "SELECT count(s_1230), count(s_2230) FROM root.dbl.g_0.d_6, root.dbl.g_0.d_7 GROUP BY ([1640967300000, 1640967550000),20000ms)",
+        "query_features": {
+          "query_type": "window_aggregation_query",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": true,
+            "has_window": true,
+            "functions": [
+              "count"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=full_scan|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "full_scan",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 8.34,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.077,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "degraded",
+      "anomalies": [],
+      "experience": {
+        "effect": "degraded",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796701,
+      "record_id": "rec00000043"
+    },
+    "rec00000044": {
+      "query_record": {
+        "query_id": "dbl_q7_3",
+        "query": "SELECT count(s_1240), count(s_2240) FROM root.dbl.g_0.d_8, root.dbl.g_0.d_9 GROUP BY ([1640967600000, 1640967850000),20000ms)",
+        "query_features": {
+          "query_type": "window_aggregation_query",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": true,
+            "has_window": true,
+            "functions": [
+              "count"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=full_scan|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "full_scan",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.59,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.094,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796737,
+      "record_id": "rec00000044"
+    },
+    "rec00000045": {
+      "query_record": {
+        "query_id": "dbl_q7_4",
+        "query": "SELECT count(s_1250), count(s_2250) FROM root.dbl.g_0.d_10, root.dbl.g_0.d_11 GROUP BY ([1640967900000, 1640968150000),20000ms)",
+        "query_features": {
+          "query_type": "window_aggregation_query",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": true,
+            "has_window": true,
+            "functions": [
+              "count"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=full_scan|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "full_scan",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.17,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.05,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796769,
+      "record_id": "rec00000045"
+    },
+    "rec00000046": {
+      "query_record": {
+        "query_id": "dbl_q8_0",
+        "query": "SELECT last s_1210, s_2210 FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3",
+        "query_features": {
+          "query_type": "unknown",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=not_applicable|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "not_applicable",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.07,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.033,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796810,
+      "record_id": "rec00000046"
+    },
+    "rec00000047": {
+      "query_record": {
+        "query_id": "dbl_q8_1",
+        "query": "SELECT last s_1220, s_2220 FROM root.dbl.g_0.d_4, root.dbl.g_0.d_5",
+        "query_features": {
+          "query_type": "unknown",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=not_applicable|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "not_applicable",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.36,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.068,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796841,
+      "record_id": "rec00000047"
+    },
+    "rec00000048": {
+      "query_record": {
+        "query_id": "dbl_q8_2",
+        "query": "SELECT last s_1230, s_2230 FROM root.dbl.g_0.d_6, root.dbl.g_0.d_7",
+        "query_features": {
+          "query_type": "unknown",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=not_applicable|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "not_applicable",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.07,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.08,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796873,
+      "record_id": "rec00000048"
+    },
+    "rec00000049": {
+      "query_record": {
+        "query_id": "dbl_q8_3",
+        "query": "SELECT last s_1240, s_2240 FROM root.dbl.g_0.d_8, root.dbl.g_0.d_9",
+        "query_features": {
+          "query_type": "unknown",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=not_applicable|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "not_applicable",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 5.98,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.038,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796904,
+      "record_id": "rec00000049"
+    },
+    "rec00000050": {
+      "query_record": {
+        "query_id": "dbl_q8_4",
+        "query": "SELECT last s_1250, s_2250 FROM root.dbl.g_0.d_10, root.dbl.g_0.d_11",
+        "query_features": {
+          "query_type": "unknown",
+          "time": {
+            "has_time_filter": false,
+            "time_span": null,
+            "range_level": "unknown"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=not_applicable|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {},
+        "by_dimension": {
+          "time_pruning": "not_applicable",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.76,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.081,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796937,
+      "record_id": "rec00000050"
+    },
+    "rec00000051": {
+      "query_record": {
+        "query_id": "dbl_q9_0",
+        "query": "SELECT s_1210, s_2210 FROM root.dbl.g_0.d_2, root.dbl.g_0.d_3 WHERE time >= 1640966700000 AND time <= 1640966950000 ORDER BY time DESC",
+        "query_features": {
+          "query_type": "range_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640966700000,
+            "end_time": 1640966950000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 8.9,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.043,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628796982,
+      "record_id": "rec00000051"
+    },
+    "rec00000052": {
+      "query_record": {
+        "query_id": "dbl_q9_1",
+        "query": "SELECT s_1220, s_2220 FROM root.dbl.g_0.d_4, root.dbl.g_0.d_5 WHERE time >= 1640967000000 AND time <= 1640967250000 ORDER BY time DESC",
+        "query_features": {
+          "query_type": "range_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967000000,
+            "end_time": 1640967250000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 8.95,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.071,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "degraded",
+      "anomalies": [],
+      "experience": {
+        "effect": "degraded",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628797020,
+      "record_id": "rec00000052"
+    },
+    "rec00000053": {
+      "query_record": {
+        "query_id": "dbl_q9_2",
+        "query": "SELECT s_1230, s_2230 FROM root.dbl.g_0.d_6, root.dbl.g_0.d_7 WHERE time >= 1640967300000 AND time <= 1640967550000 ORDER BY time DESC",
+        "query_features": {
+          "query_type": "range_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967300000,
+            "end_time": 1640967550000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 8.82,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.054,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628797057,
+      "record_id": "rec00000053"
+    },
+    "rec00000054": {
+      "query_record": {
+        "query_id": "dbl_q9_3",
+        "query": "SELECT s_1240, s_2240 FROM root.dbl.g_0.d_8, root.dbl.g_0.d_9 WHERE time >= 1640967600000 AND time <= 1640967850000 ORDER BY time DESC",
+        "query_features": {
+          "query_type": "range_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967600000,
+            "end_time": 1640967850000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 7.94,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.038,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628797091,
+      "record_id": "rec00000054"
+    },
+    "rec00000055": {
+      "query_record": {
+        "query_id": "dbl_q9_4",
+        "query": "SELECT s_1250, s_2250 FROM root.dbl.g_0.d_10, root.dbl.g_0.d_11 WHERE time >= 1640967900000 AND time <= 1640968150000 ORDER BY time DESC",
+        "query_features": {
+          "query_type": "range_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640967900000,
+            "end_time": 1640968150000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 8.16,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.037,
+          "memory_utilization": 0.162,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "unchanged",
+      "anomalies": [],
+      "experience": {
+        "effect": "unchanged",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628797126,
+      "record_id": "rec00000055"
+    },
+    "rec00000056": {
+      "query_record": {
+        "query_id": "query-0001",
+        "query": "-- Q3 generated 2000 queries using numeric sensors s_1666+\nSELECT s_1666, s_1716 FROM root.dbl.g_0.d_0, root.dbl.g_0.d_1 WHERE time >= 1640966400000 AND time <= 1640966650000 AND root.dbl.g_0.d_0.s_1666 > -5 AND root.dbl.g_0.d_0.s_1716 > -5 AND root.dbl.g_0.d_1.s_1666 > -5 AND root.dbl.g_0.d_1.s_1716 > -5",
+        "query_features": {
+          "query_type": "predicate_filter_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640966400000,
+            "end_time": 1640966650000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "failed",
+        "failure_reason": "StatementExecutionException: 700: Error occurred while parsing SQL to physical plan: line 1:0 mismatched input '-' expecting {ALTER, CALL, CLEAR, COUNT, CREATE, DEACTIVATE, DEBUG, DELETE, DROP, EXPLAIN, EXTEND, FLUSH, GRANT, INSERT, KILL, LIST, LOAD, MIGRATE, RECONSTRUCT, REMOVE, REVOKE, SELECT, SET, SETTLE, SHOW, START, STOP, ",
+        "metrics": {
+          "response_time_ms": null,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": null,
+          "memory_utilization": null,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "failed",
+      "anomalies": [
+        {
+          "type": "execution_failed",
+          "severity": "critical",
+          "metric": null,
+          "observed": "failed",
+          "reference": "StatementExecutionException: 700: Error occurred while parsing SQL to physical plan: line 1:0 mismatched input '-' expecting {ALTER, CALL, CLEAR, COUNT, CREATE, DEACTIVATE, DEBUG, DELETE, DROP, EXPLAIN, EXTEND, FLUSH, GRANT, INSERT, KILL, LIST, LOAD, MIGRATE, RECONSTRUCT, REMOVE, REVOKE, SELECT, SET, SETTLE, SHOW, START, STOP, ",
+          "description": "查询执行失败：StatementExecutionException: 700: Error occurred while parsing SQL to physical plan: line 1:0 mismatched input '-' expecting {ALTER, CALL, CLEAR, COUNT, CREATE, DEACTIVATE, DEBUG, DELETE, DROP, EXPLAIN, EXTEND, FLUSH, GRANT, INSERT, KILL, LIST, LOAD, MIGRATE, RECONSTRUCT, REMOVE, REVOKE, SELECT, SET, SETTLE, SHOW, START, STOP, "
+        }
+      ],
+      "experience": {
+        "effect": "failed",
+        "confidence": 0.7
+      },
+      "timestamp": 1789628961242,
+      "record_id": "rec00000056"
+    },
+    "rec00000057": {
+      "query_record": {
+        "query_id": "query-0001",
+        "query": "SELECT s_1666, s_1716 FROM root.dbl.g_0.d_0, root.dbl.g_0.d_1 WHERE time >= 1640966400000 AND time <= 1640966650000 AND root.dbl.g_0.d_0.s_1666 > -5 AND root.dbl.g_0.d_0.s_1716 > -5 AND root.dbl.g_0.d_1.s_1666 > -5 AND root.dbl.g_0.d_1.s_1716 > -5",
+        "query_features": {
+          "query_type": "predicate_filter_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 4
+          },
+          "aggregation": {
+            "has_aggregation": false,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": []
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "large"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=time_first|aggregation_placement=not_applicable",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640966400000,
+            "end_time": 1640966650000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "time_first",
+          "aggregation_placement": "not_applicable"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 4.87,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.052,
+          "memory_utilization": 0.163,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1789629078755,
+      "record_id": "rec00000057"
+    }
+  }
+}

@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import Optional
 
 from mataof.schemas import query_analysis_output_template
+from mataof.agents.query_analysis.llm_enhance import build_llm_analysis
 from mataof.agents.query_analysis.parser import parse_query, ParseContext
 from mataof.agents.query_analysis.features import (
     time as time_features,
@@ -54,8 +55,15 @@ class QueryAnalysisAgent:
     description = "对时序数据库查询进行语义解析与优化相关特征提取，产出结构化查询上下文。"
 
     def analyze(self, query: str, query_id: str = "",
-                database_state: Optional[dict] = None) -> dict:
-        """分析一条查询，返回结构化 JSON（字典）。任何输入都不抛异常。"""
+                database_state: Optional[dict] = None,
+                llm: Optional[object] = None) -> dict:
+        """分析一条查询，返回结构化 JSON（字典）。任何输入都不抛异常。
+
+        llm：可选的 LLMClient（mataof.llm）。混合增强模式：
+        - 确定性提取字段始终权威，LLM 只填充 llm_analysis 节；
+        - llm=None / 调用失败 / 输出非法 → llm_analysis.available=false，
+          确定性输出与不启用 LLM 时完全一致（确定性兜底）。
+        """
         output = query_analysis_output_template()
         output["query_id"] = str(query_id or "")
         output["query"] = query
@@ -107,6 +115,9 @@ class QueryAnalysisAgent:
             ctx, query_type, time_section, device_section,
             filter_section, scan_section, aggregation_section,
         )
+
+        # ---- LLM 语义增强（混合增强：只进 llm_analysis 节，失败不影响确定性结果）----
+        output["llm_analysis"] = build_llm_analysis(query, output, llm)
         return output
 
 
@@ -115,6 +126,8 @@ default_agent = QueryAnalysisAgent()
 
 
 def analyze(query: str, query_id: str = "",
-            database_state: Optional[dict] = None) -> dict:
-    """Query Analysis Agent 的便捷入口。"""
-    return default_agent.analyze(query=query, query_id=query_id, database_state=database_state)
+            database_state: Optional[dict] = None,
+            llm: Optional[object] = None) -> dict:
+    """Query Analysis Agent 的便捷入口。llm 为可选的 LLMClient（混合增强）。"""
+    return default_agent.analyze(query=query, query_id=query_id,
+                                 database_state=database_state, llm=llm)

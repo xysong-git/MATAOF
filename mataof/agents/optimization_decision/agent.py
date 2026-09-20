@@ -43,6 +43,10 @@ from mataof.agents.optimization_decision.confidence import (
     dimension_confidence,
     overall_confidence,
 )
+from mataof.agents.optimization_decision.llm_enhance import (
+    build_llm_analysis,
+    request_preferences,
+)
 
 
 class OptimizationDecisionAgent:
@@ -65,7 +69,13 @@ class OptimizationDecisionAgent:
     description = "综合查询特征、数据库状态、系统状态与历史经验，在候选策略空间中"
     description += "选择当前查询的优化策略，并给出可追踪的依据与置信度。"
 
-    def decide(self, decision_input: dict) -> dict:
+    def decide(self, decision_input: dict, llm: Optional[object] = None) -> dict:
+        """决策入口。llm：可选 LLMClient（混合增强模式）。
+
+        - llm=None / 调用失败 → 确定性决策完全不变（兜底）；
+        - 开启 decision_input["llm_preference_bonus"] 时，LLM 第一偏好 +0.05 分
+          （实验性，不参与风险门控）。
+        """
         output = optimization_decision_output_template()
 
         ctx = normalize_input(decision_input)
@@ -74,6 +84,12 @@ class OptimizationDecisionAgent:
             output["decision_status"] = "invalid_input"
             output["fallback_strategy"] = ""
             return output
+
+        # ---- LLM 候选偏好（仅 bonus 开启时参与评分；失败 → 空）----
+        llm_preferences: dict = {}
+        if llm is not None and decision_input.get("llm_preference_bonus"):
+            llm_preferences = request_preferences(llm, decision_input, ctx.candidates,
+                                                  ctx.notes)
 
         # ---- 历史证据（相似度过滤 + 加权）----
         ev = build_history_evidence(
@@ -84,7 +100,7 @@ class OptimizationDecisionAgent:
         # ---- 各维度评估与选择 ----
         results: dict[str, DimensionResult] = {}
         for dim in DIMENSIONS:
-            results[dim] = evaluate_dimension(dim, ctx, ev)
+            results[dim] = evaluate_dimension(dim, ctx, ev, llm_preferences)
 
         # ---- 维度置信度 ----
         dim_conf = {dim: dimension_confidence(results[dim], ctx, ev) for dim in DIMENSIONS}
@@ -161,6 +177,10 @@ class OptimizationDecisionAgent:
                 f"（{SIMILARITY_THRESHOLD}），未参与决策"
             )
         output["notes"] = notes
+
+        # ---- LLM 语义增强（只进 llm_analysis 节；失败不影响确定性决策）----
+        output["llm_analysis"] = build_llm_analysis(llm, decision_input, output,
+                                                    ctx.candidates)
         return output
 
 
@@ -333,6 +353,6 @@ def _collect_evidence(ctx: DecisionContext, ev, results: dict) -> dict:
 default_agent = OptimizationDecisionAgent()
 
 
-def decide(decision_input: dict) -> dict:
-    """Optimization Decision Agent 的便捷入口。"""
-    return default_agent.decide(decision_input)
+def decide(decision_input: dict, llm: Optional[object] = None) -> dict:
+    """Optimization Decision Agent 的便捷入口。llm 为可选 LLMClient（混合增强）。"""
+    return default_agent.decide(decision_input, llm=llm)

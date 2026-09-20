@@ -190,6 +190,13 @@ def query_analysis_output_template() -> dict:
         },
         "unknown_features": [],             # 所有标记为 unknown 的特征及其原因
         "analysis_confidence": 0.0,
+        "llm_analysis": {                   # 扩展：LLM 语义增强（混合增强模式）
+            "available": False,             #   LLM 未启用/失败 → false，确定性字段不受影响
+            "semantic_summary": None,       #   LLM 生成的语义摘要（llm_generated）
+            "query_type_hint": None,        #   确定性类型为 unknown 时的 LLM 提示（仅提示）
+            "condition_hints": {},          #   tag_or_attribute 条件的判别建议（仅建议）
+            "notes": [],                    #   增强过程说明（失败/非法输出等）
+        },
         "schema_version": "1.0",            # 扩展：输出 schema 版本（实验对齐）
     }
 
@@ -227,6 +234,12 @@ def optimization_decision_output_template() -> dict:
         "fallback_strategy": "",             # 触发回退时给出回退到的策略组合
         "decision_status": "invalid_input",  # success | partial_fallback | fallback | invalid_input
         "notes": [],                         # 扩展：排除候选、记录过滤等可追踪说明
+        "llm_analysis": {                    # 扩展：LLM 语义增强（混合增强模式）
+            "available": False,              #   LLM 未启用/失败 → false，确定性决策不变
+            "semantic_reason": None,         #   LLM 生成的决策解读（llm_generated）
+            "preferences": {},               #   候选偏好排序（严格限于候选集合内）
+            "notes": [],                     #   增强过程说明
+        },
     }
 
 
@@ -299,6 +312,12 @@ def execution_monitoring_output_template() -> dict:
             "confidence": 0.0,
             "assessment_basis": [],        # 扩展：判断依据（可追踪的实测事实）
             "scope": "single_execution",   # 扩展：单次执行观察，不代表策略永久有效
+        },
+        "llm_analysis": {                  # 扩展：LLM 语义增强（混合增强模式）
+            "available": False,            #   LLM 未启用/失败 → false，事实字段不变
+            "performance_summary": None,   #   性能复述（数字级校验：⊆ 给定数据）
+            "anomaly_summary": None,       #   异常关联解读（禁因果归因/禁建议）
+            "notes": [],
         },
         "notes": [],                       # 扩展：数据缺失/无效等可追踪说明
     }

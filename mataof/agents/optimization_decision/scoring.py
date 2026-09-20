@@ -63,6 +63,7 @@ class CandidateEvaluation:
     context_bonus: float
     history_bonus: float
     system_bonus: float
+    llm_bonus: float = 0.0                                # LLM 偏好加分（不参与门控）
     factor_labels: list = field(default_factory=list)     # 用于 reason 的可追踪说明
     equivalent_sql: Optional[str] = None                  # 候选提供方给出的等价 SQL
     parameters: Optional[dict] = None                     # 候选提供的执行级参数
@@ -265,7 +266,8 @@ def _gate_passed(eval_: CandidateEvaluation, ctx: DecisionContext,
 
 
 def evaluate_dimension(dim: str, ctx: DecisionContext,
-                       ev: HistoryEvidence) -> DimensionResult:
+                       ev: HistoryEvidence,
+                       llm_preferences: Optional[dict] = None) -> DimensionResult:
     """评估一个维度：候选过滤 → 评分 → 门控 → 选择/回退。"""
     result = DimensionResult(dimension=dim, applicable=False)
 
@@ -314,7 +316,13 @@ def evaluate_dimension(dim: str, ctx: DecisionContext,
         evl.context_bonus = _context_bonus(ctx, dim, name, labels)
         evl.history_bonus = _history_bonus(ev, dim, name, labels)
         evl.system_bonus = _system_bonus(ctx, name, labels)
-        evl.score = round(evl.base + evl.context_bonus + evl.history_bonus + evl.system_bonus, 4)
+        # LLM 偏好加分（实验性）：只影响总分，不参与风险门控——LLM 不能解锁策略
+        prefs = (llm_preferences or {}).get(dim) or []
+        if prefs and name == prefs[0]:
+            evl.llm_bonus = 0.05
+            labels.append("LLM 偏好加分（+0.05，实验性，不参与门控）")
+        evl.score = round(evl.base + evl.context_bonus + evl.history_bonus
+                          + evl.system_bonus + evl.llm_bonus, 4)
         evl.gate_passed = _gate_passed(evl, ctx, ev)
         if not evl.gate_passed:
             evl.excluded_reason = "风险门控未通过（缺少足够的支撑信号/历史证据）"

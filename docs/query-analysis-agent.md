@@ -156,7 +156,35 @@
 - IoTDB 特有语法仅覆盖：`GROUP BY ([a,b), interval[, step])`、`GROUP BY TIME(i)`、
   `GROUP BY LEVEL = n`、`ALIGN BY DEVICE`、FROM 通配符路径；其他方言扩展按需补充预处理层。
 
-## 6. 验证方式
+## 6. LLM 语义增强（混合增强模式）
+
+确定性提取是权威；LLM 只填充 `llm_analysis` 附加节（不改变任何确定性字段）：
+
+```json
+"llm_analysis": {
+  "available": true,
+  "semantic_summary": "查询单设备在指定时间窗口内读取测点数据。",
+  "query_type_hint": "range_query",
+  "condition_hints": {"t1 = 'v1'": "tag"},
+  "notes": []
+}
+```
+
+- `semantic_summary`：查询意图自然语言摘要（llm_generated）；
+- `query_type_hint`：确定性类型为 unknown 时的 LLM 提示（**仅提示，不改写
+  query_type**——"不得强行分类"原则不变）；
+- `condition_hints`：tag_or_attribute 歧义条件的判别建议（tag/attribute/unclear，
+  仅建议，确定性标记不变）；
+- **确定性兜底**：LLM 未启用（`llm=None`/provider=none）、调用超时/失败/输出非法
+  JSON → `available=false` + notes，核心输出与不启用 LLM 完全一致；
+- **非确定性说明**：启用 LLM 后 `llm_analysis` 节受模型随机性影响；
+  所有核心特征字段保持确定性，实验对比时以核心字段为准。
+
+接入方式：`analyze(query, query_id, database_state, llm=llm_client)`；
+客户端由共享层构造（`mataof/llm.py`，OpenAI 兼容 API / 本地 HTTP 服务双后端，
+配置见 docs/cli.md 的 llm 节）。
+
+## 7. 验证方式
 
 - 单元测试：`pytest tests/test_query_analysis_agent.py`（37 例，覆盖六类任务与 strict 限制）；
 - 真实语料鲁棒性：`pytest tests/test_sample_corpus.py`（MAPO 前序工作 5 个数据集、

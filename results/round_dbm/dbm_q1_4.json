@@ -1,0 +1,268 @@
+{
+  "query_id": "dbm_q1_4",
+  "query": "SELECT s_1671, s_1771 FROM root.dbm.g_0.d_10, root.dbm.g_0.d_11 WHERE time = 1640967950000",
+  "analysis": {
+    "query_id": "dbm_q1_4",
+    "query": "SELECT s_1671, s_1771 FROM root.dbm.g_0.d_10, root.dbm.g_0.d_11 WHERE time = 1640967950000",
+    "query_type": "point_query",
+    "query_features": {
+      "time": {
+        "has_time_filter": true,
+        "start_time": 1640967950000,
+        "end_time": 1640967950000,
+        "time_span": 0,
+        "range_level": "narrow",
+        "time_condition_form": "equality",
+        "time_filter_expressions": [
+          "time = 1640967950000"
+        ]
+      },
+      "device": {
+        "has_device_filter": true,
+        "device_count": 2,
+        "multi_device": true,
+        "device_paths": [
+          "root.dbm.g_0.d_10",
+          "root.dbm.g_0.d_11"
+        ],
+        "device_condition_count": 2
+      },
+      "filter": {
+        "filter_count": 1,
+        "filter_types": [
+          "time"
+        ],
+        "selectivity": {},
+        "conditions": [
+          {
+            "expression": "time = 1640967950000",
+            "type": "time",
+            "column": "time",
+            "operator": "eq",
+            "value": "1640967950000"
+          }
+        ],
+        "type_counts": {
+          "time": 1
+        },
+        "combination": {
+          "op": "leaf",
+          "index": 0
+        }
+      },
+      "aggregation": {
+        "has_aggregation": false,
+        "aggregation_functions": [],
+        "has_group_by": false,
+        "has_window": false,
+        "group_by_details": null,
+        "aggregation_scope": {
+          "from_paths": [
+            "root.dbm.g_0.d_10",
+            "root.dbm.g_0.d_11"
+          ],
+          "time_bounds": [
+            1640967950000,
+            1640967950000
+          ],
+          "window_range": null,
+          "has_non_time_filters": false,
+          "description": "设备范围：root.dbm.g_0.d_10, root.dbm.g_0.d_11；时间范围：[1640967950000, 1640967950000]（毫秒）"
+        }
+      },
+      "scan": {
+        "estimated_scan_range": null,
+        "scan_level": "unknown",
+        "possible_large_scan": false,
+        "has_obvious_filter_conditions": true,
+        "possible_large_intermediate_result": false
+      }
+    },
+    "optimization_relevant_features": {
+      "time_pruning": [
+        "查询包含明确时间过滤条件（形式 equality，时间跨度 0 ms，范围等级 narrow），Time Pruning 属于相关候选优化维度。"
+      ],
+      "filter_order": [],
+      "aggregation_placement": []
+    },
+    "unknown_features": [
+      "选择率：数据库未提供选择率数据，不做估计",
+      "预计扫描范围：unknown（未提供数据库统计信息，不自行估计）"
+    ],
+    "analysis_confidence": 0.95,
+    "schema_version": "1.0"
+  },
+  "knowledge_retrieval": {
+    "matched_count": 4,
+    "knowledge_confidence": 1.0
+  },
+  "decision": {
+    "query_id": "dbm_q1_4",
+    "decision": {
+      "time_pruning": {
+        "strategy": "partition_pruning",
+        "reason": "时间边界已知（[1640967950000, 1640967950000]，跨度 0 ms，narrow）；时间范围 narrow（+0.10）；历史证据 4 条（加权 1.00，加权平均延迟 9.5 ms，相对最优比例 0.95，+0.24）；排除：chunk_level_filtering；在当前信息条件下选择 partition_pruning（score 0.8874）。",
+        "confidence": 1.0,
+        "equivalent_sql": null
+      },
+      "filter_order": {
+        "strategy": "not_applicable",
+        "reason": "非时间过滤条件数为 0（<2），过滤顺序无意义",
+        "confidence": 0.0,
+        "equivalent_sql": null
+      },
+      "aggregation_placement": {
+        "strategy": "not_applicable",
+        "reason": "查询不含聚合",
+        "confidence": 0.0,
+        "equivalent_sql": null
+      }
+    },
+    "selected_strategy": {
+      "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+      "strategy_parameters": {
+        "time_pruning": {
+          "start_time": 1640967950000,
+          "end_time": 1640967950000
+        }
+      },
+      "equivalent_sql": "SELECT s_1671, s_1771 FROM root.dbm.g_0.d_10, root.dbm.g_0.d_11 WHERE time = 1640967950000"
+    },
+    "evidence": {
+      "query_features": [
+        "time.has_time_filter=true",
+        "time.time_span=0ms",
+        "time.range_level=narrow"
+      ],
+      "database_state": [
+        "database_state.data_scale_level=medium"
+      ],
+      "system_state": [
+        "system_state 未提供（视为 unknown）"
+      ],
+      "historical_records": [
+        {
+          "record_id": "rec00000001",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000002",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000003",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000004",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": null,
+          "summary": {
+            "considered": 4,
+            "used": 4,
+            "below_similarity_threshold": 0,
+            "invalid": 0
+          }
+        }
+      ]
+    },
+    "overall_confidence": 0.98,
+    "fallback_strategy": "",
+    "decision_status": "success",
+    "notes": [
+      "排除 chunk_level_filtering：需求不满足：缺少/不满足 database_state.physical_organization.chunk_level（known）"
+    ]
+  },
+  "execution": {
+    "execution_status": "success",
+    "failure_reason": null,
+    "metrics": {
+      "response_time_ms": 9.03,
+      "cpu_utilization": 0.085,
+      "memory_utilization": 0.161
+    },
+    "baseline_metrics": {
+      "response_time_ms": 25.64,
+      "cpu_utilization": 0.091,
+      "memory_utilization": 0.161
+    },
+    "timestamp": 1789628793011
+  },
+  "monitoring": {
+    "query_id": "dbm_q1_4",
+    "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+    "execution_status": "success",
+    "failure_reason": null,
+    "metrics": {
+      "response_time_ms": 9.03,
+      "p50_latency_ms": null,
+      "p95_latency_ms": null,
+      "p99_latency_ms": null,
+      "throughput": null,
+      "cpu_utilization": 0.085,
+      "memory_utilization": 0.161,
+      "io_throughput": null
+    },
+    "baseline_comparison": {
+      "available": true,
+      "latency_change_percent": -64.78,
+      "p95_change_percent": null,
+      "p99_change_percent": null,
+      "throughput_change_percent": null,
+      "cpu_change_percent": -6.59,
+      "memory_change_percent": 0.0,
+      "io_change_percent": null
+    },
+    "performance_change": [
+      "latency_reduction",
+      "cpu_decrease"
+    ],
+    "performance_assessment": "improved",
+    "anomalies": [],
+    "feedback": {
+      "strategy_effective": true,
+      "confidence": 0.7,
+      "assessment_basis": [
+        "response_time_ms: 实测 9.03 ms vs baseline（变化 -64.78%）"
+      ],
+      "scope": "single_execution"
+    },
+    "notes": []
+  },
+  "knowledge_update": {
+    "update_type": "new_record",
+    "record_id": "rec00000005",
+    "stored": true,
+    "strategy_effect": "improved",
+    "knowledge_update": {
+      "success_record": true,
+      "failure_record": false,
+      "strategy_priority_change": null
+    },
+    "notes": [
+      "历史记录已追加存储：rec00000005（append-only，不修改/删除既有记录）"
+    ]
+  }
+}

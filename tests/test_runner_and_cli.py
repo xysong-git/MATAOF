@@ -13,7 +13,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mataof.runner import PipelineRunner, RunnerConfig, load_config_file  # noqa: E402
+from mataof.runner import (  # noqa: E402
+    PipelineRunner,
+    RunnerConfig,
+    load_config_file,
+    split_sql_statements,
+)
 from mataof.executors import FileExecutor, NullExecutor, build_executor  # noqa: E402
 from mataof.cli import main  # noqa: E402
 
@@ -120,6 +125,29 @@ def test_runner_run_file_sql(tmp_path):
     assert len(traces) == 2
 
 
+def test_split_sql_statements_strips_comments():
+    text = ("-- Q1 generated 2000 queries\n"
+            f"{NARROW_Q};\n"
+            "-- 第二条注释\n"
+            f"{MEDIUM_Q};")
+    stmts = split_sql_statements(text)
+    assert stmts == [NARROW_Q, MEDIUM_Q]
+    assert all(not s.startswith("--") for s in stmts)
+
+
+def test_runner_run_file_with_comments_executes_clean_sql(tmp_path):
+    rf = _results_file(tmp_path, [])
+    runner = PipelineRunner(RunnerConfig(
+        results_dir=str(tmp_path / "results"),
+        executor={"type": "file", "results_file": rf},
+    ))
+    f = tmp_path / "queries.sql"
+    f.write_text(f"-- 注释头\n{NARROW_Q};", encoding="utf-8")
+    traces = runner.run_file(str(f))
+    assert len(traces) == 1
+    assert not traces[0]["query"].startswith("--")
+
+
 def test_runner_without_results_dir(tmp_path):
     runner = PipelineRunner(RunnerConfig())   # 全部默认：不落盘、NullExecutor
     trace = runner.run_query(NARROW_Q, query_id="q1")
@@ -192,3 +220,12 @@ def test_cli_run_file(tmp_path):
     f.write_text(f"{NARROW_Q};", encoding="utf-8")
     cfg = _cfg(tmp_path)
     assert main(["run", "--config", cfg, "--file", str(f)]) == 0
+
+
+def test_cli_run_limit(tmp_path):
+    f = tmp_path / "queries.sql"
+    f.write_text(f"{NARROW_Q};{MEDIUM_Q};{NARROW_Q};", encoding="utf-8")
+    cfg = _cfg(tmp_path, results_dir=str(tmp_path / "results"))
+    assert main(["run", "--config", cfg, "--file", str(f), "--limit", "2"]) == 0
+    log = (tmp_path / "results" / "run_log.jsonl").read_text(encoding="utf-8")
+    assert len(log.strip().splitlines()) == 2

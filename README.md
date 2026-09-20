@@ -109,6 +109,7 @@ python3 -m pytest tests/ -v
 ```
 
 正式运行手册（配置文件、执行层对接、追踪输出）见 [docs/cli.md](docs/cli.md)；
+**三规模查询集（query/ 目录）的一轮实验执行说明见 [docs/run-experiment.md](docs/run-experiment.md)**；
 各 Agent 的输入/输出契约见 docs/ 下的规格文档。
 
 ## 目录结构
