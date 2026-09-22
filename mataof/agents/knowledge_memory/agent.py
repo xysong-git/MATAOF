@@ -59,11 +59,30 @@ class KnowledgeMemoryAgent:
     # 检索
     # ------------------------------------------------------------------
     def retrieve(self, query_analysis: dict, database_state: Optional[dict] = None,
-                 system_state: Optional[dict] = None, query_id: str = "") -> dict:
-        """检索与当前查询上下文相关的历史知识（三层匹配 + 汇总 + 模式）。"""
-        result = _retrieve(self.store, query_analysis, database_state, system_state, query_id)
-        result["llm_analysis"] = build_retrieve_llm_analysis(
-            self.llm, result, query_analysis)
+                 system_state: Optional[dict] = None, query_id: str = "",
+                 llm_summary: bool = True,
+                 max_records: Optional[int] = None) -> dict:
+        """检索与当前查询上下文相关的历史知识（三层匹配 + 汇总 + 模式）。
+
+        llm_summary=False 时跳过 LLM 解读（如 runner 链路：决策只消费结构化记录，
+        每条查询省一次 LLM 调用）；无匹配记录时同样跳过（无内容可解读）。
+        max_records 为返回记录上限（top-K；None 不截断，API 默认）。
+        """
+        result = _retrieve(self.store, query_analysis, database_state, system_state,
+                           query_id, max_records=max_records)
+        if not llm_summary:
+            result["llm_analysis"] = {
+                "available": False, "semantic_summary": None,
+                "notes": ["llm_summary=false，跳过 LLM 解读"],
+            }
+        elif not result.get("matched_records"):
+            result["llm_analysis"] = {
+                "available": False, "semantic_summary": None,
+                "notes": ["无匹配历史记录，跳过 LLM 解读"],
+            }
+        else:
+            result["llm_analysis"] = build_retrieve_llm_analysis(
+                self.llm, result, query_analysis)
         return result
 
     # ------------------------------------------------------------------

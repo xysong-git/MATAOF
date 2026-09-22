@@ -1,0 +1,30 @@
+{
+  "knowledge_store": "data/knowledge_local.json",
+  "results_dir": "results/round_local_llm",
+  "executor": {
+    "type": "iotdb",
+    "host": "127.0.0.1",
+    "port": 6667,
+    "user": "root",
+    "password": "root",
+    "fetch_size": 1024,
+    "measure_baseline": true
+  },
+  "database_state": {"data_scale_level": "small"},
+  "system_state": {},
+  "candidate_strategies": null,
+  "baseline_strategy": null,
+  "thresholds": {},
+  "reference_time": null,
+  "llm": {
+    "provider": "openai",
+    "base_url": "http://127.0.0.1:8000/v1",
+    "api_key": "EMPTY",
+    "model": "/opt/models/Qwen3-8B",
+    "timeout_s": 180,
+    "max_tokens": 1024,
+    "log_file": "data/llm_log.jsonl",
+    "extra_body": {"chat_template_kwargs": {"enable_thinking": false}},
+    "preference_bonus": false
+  }
+}

@@ -59,10 +59,17 @@ def _numbers_in(text: str) -> list:
 def number_consistency_check(text: str, facts: set) -> bool:
     """数字级校验：文本中的每个数字的**量级**必须出现在事实集合（容差 1e-9）。
 
-    忽略符号：数据中的 -38.5 与表述中的「降低 38.5%」是同一事实，
-    符号语义由定性文字承载；量级校验仍能拒绝任何编造数字。
+    - 忽略符号：数据中的 -38.5 与表述中的「降低 38.5%」是同一事实，
+      符号语义由定性文字承载；
+    - 允许 ×100 / ÷100 单位换算：数据 0.42 与表述「CPU 利用率 42%」是同一事实；
+    - 量级校验仍能拒绝任何编造数字（如凭空出现 99.9、150、3 倍）。
     """
-    magnitudes = {abs(f) for f in facts}
+    magnitudes: set = set()
+    for f in facts:
+        m = abs(f)
+        magnitudes.add(m)
+        magnitudes.add(round(m * 100, 9))
+        magnitudes.add(round(m / 100, 9))
     for n in _numbers_in(text):
         if not any(abs(abs(n) - m) < 1e-9 for m in magnitudes):
             return False

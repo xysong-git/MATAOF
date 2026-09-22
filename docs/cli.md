@@ -19,6 +19,25 @@ mataof stats                               # 知识库累计统计
 公共参数：`--config CONFIG`（JSON 配置文件）、`--json`（stdout 输出机器可读 JSON）。
 `run` 另有 `--results-dir DIR` 覆盖追踪输出目录。
 
+**批次执行汇总**：每次 `mataof run` 结束时打印本批次统计（数据全部来自本批次
+真实执行样本，绝不编造）：
+
+```
+== 执行汇总（本批次）==
+查询数: 3 | 总用时: 0.13s | 吞吐: 23.0769 查询/秒
+执行: 成功 3 / 失败 0 / 超时 0 / 未知 0（成功率 1.0）
+效果分布: improved 3
+延迟（成功执行，样本 3）: avg 5.64ms | min 5.33ms | max 5.81ms | P50 5.77ms | P95 5.81ms | P99 5.81ms
+baseline 延迟（样本 3）: avg 6.46ms | P50 6.34ms | P95 7.4ms | P99 7.4ms
+```
+
+- **分位数只在此生成**：P50/P95/P99 是多样本统计，对"成功执行"的实测延迟样本
+  按最近秩法计算；样本不足 2 条时如实为 null（单次执行不产生分位数）；
+- 吞吐 = 本批次查询数 / 墙钟总用时；成功率 = success / 总数
+  （failed/timeout/unknown 分别计数）；
+- `--json` 模式 stdout 输出 `{"traces": [...], "batch_summary": {...}}`；
+- 编程方式：`from mataof.report import batch_summary, format_batch_summary`。
+
 ## 3. 配置文件（config.example.json 为模板）
 
 ```json
@@ -114,6 +133,15 @@ bash $IOTDB/sbin/stop-standalone.sh      # 停止
 - `provider=openai`：任何 OpenAI 兼容 API（DeepSeek/OpenAI/自建 vLLM）；
 - `provider=local`：本地推理服务（POST `{"messages", "max_tokens"}` → `{"text"}`，
   与 MAPO 的 FastAPI 服务形式一致）；
+
+**本地 vLLM + Qwen3 配置要点**（本机已验证，模板见 `config.local-llm.json`）：
+- `base_url` 指向 `http://127.0.0.1:8000/v1`，`model` 填服务端模型名
+  （vLLM 默认即模型路径，如 `/opt/models/Qwen3-8B`）；vLLM 无鉴权时
+  `api_key` 填任意非空值（如 `EMPTY`）；
+- **Qwen3 需关闭 thinking**：`"extra_body": {"chat_template_kwargs":
+  {"enable_thinking": false}}`——否则输出进入 `<think>` 块、消耗大量 token；
+- **本地地址自动绕过系统代理**：客户端对 127.0.0.1/localhost 直连，
+  不受 `http_proxy` 环境变量影响（远程 API 仍遵循系统代理）。
 - **失败即兜底**：LLM 不可用/超时/输出非法 → Agent 自动回退确定性规则，
   绝不中断链路；调用统计写入 `log_file`（JSONL）。
 

@@ -65,6 +65,7 @@ FABRICATED_JSON = json.dumps({
 def test_number_consistency_check():
     facts = {12.3, 20.0, -38.5, 0.42, 0.45}
     assert number_consistency_check("延迟 12.3 ms，相对 20.0 降低 38.5%", facts) is True
+    assert number_consistency_check("CPU 利用率 42%", facts) is True      # ×100 单位换算
     assert number_consistency_check("延迟 99.9 ms", facts) is False
     assert number_consistency_check("是 3 倍", facts) is False
     assert number_consistency_check("纯文字描述无数字", facts) is True

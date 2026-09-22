@@ -95,10 +95,29 @@ def test_retrieve_summary_contains_no_strategy_advice():
 
 def test_retrieve_llm_failure_falls_back():
     km = KnowledgeMemoryAgent(llm=FakeLLM(exc=ConnectionError("refused")))
+    _ingest(km)   # 先有一条记录（否则空匹配直接跳过解读）
+    km.llm = FakeLLM(exc=ConnectionError("refused"))
     r = km.retrieve(analyze(NARROW_Q, query_id="new"))
     assert r["llm_analysis"]["available"] is False
     assert any("回退" in n for n in r["llm_analysis"]["notes"])
     assert "matched_records" in r
+
+
+def test_retrieve_empty_match_skips_llm():
+    km = KnowledgeMemoryAgent(llm=FakeLLM(responses=[RETRIEVE_JSON]))
+    r = km.retrieve(analyze(NARROW_Q, query_id="new"))
+    assert r["llm_analysis"]["available"] is False
+    assert any("无匹配" in n for n in r["llm_analysis"]["notes"])
+
+
+def test_retrieve_llm_summary_false_skips_llm():
+    km = KnowledgeMemoryAgent()
+    _ingest(km)
+    km.llm = FakeLLM(responses=[RETRIEVE_JSON])
+    r = km.retrieve(analyze(NARROW_Q, query_id="new"), llm_summary=False)
+    assert r["llm_analysis"]["available"] is False
+    assert any("llm_summary=false" in n for n in r["llm_analysis"]["notes"])
+    assert r["matched_records"], "结构化检索结果不受影响"
 
 
 def test_retrieve_llm_disabled():

@@ -56,11 +56,37 @@ for f in query/queries_dbl/q*.sql; do
 done
 ```
 
-**方式 B：验证性小样本（--limit，先跑通流程再全量）**
+**方式 B：每文件取样（不用跑全量，新增参数）**
 
 ```bash
-mataof run --file query/queries_dbs/q1.sql --config config.dbs.json --limit 20
+# 每个文件顺序取前 20 条
+mataof run --file query/queries_dbs/q1.sql --config config.dbs.json --per-file-limit 20
+
+# 每个文件随机取 20 条（seed=42 默认，同种子可复现；换 --seed 换抽样）
+mataof run --file query/queries_dbs/q1.sql --config config.dbs.json \
+           --per-file-limit 20 --sample random --seed 42
+
+# 一轮全量=每个文件取 N 条：三规模 33 个文件 × N 条
+for f in query/queries_dbs/q*.sql; do
+  mataof run --file "$f" --config config.dbs.json --per-file-limit 100 --sample random
+done
 ```
+
+参数说明：
+- `--per-file-limit N`：**每个 SQL 文件**最多取 N 条（默认全量 2000）；
+- `--sample seq|random`：顺序取前 N 条 / 随机抽样（抽样保持文件内原有顺序，
+  种子可复现；同一 `--seed` 两次运行取到完全相同的语句）；
+- `--seed N`：随机抽样种子（默认 42）；
+- `--limit N`：与 `--file` 联用时等价于 `--per-file-limit`（兼容旧用法）；
+- 配置文件同样支持：`"per_file_limit": 100, "sample_mode": "random", "sample_seed": 42`；
+- 采样信息写入每条追踪与 `run_log.jsonl` 的 `sampling` 字段
+  （如 `{"mode": "random", "limit": 3, "total": 2000, "seed": 42}`），实验可追溯。
+
+**知识库规模与证据截断**：知识库 append-only 累积，查询集同质时相似历史会很多——
+决策证据清单默认取 top-100（配置 `knowledge_max_records`），防止结果文件膨胀与
+每查询检索开销线性增长；截断不影响成功率统计（始终全量计算）。
+
+耗时 = 每文件条数 × 每查询耗时（见 §2.1 吞吐表），按取样比例线性缩短。
 
 **方式 C：后台整轮运行（约 50 分钟，见耗时估算）**
 
@@ -77,6 +103,22 @@ nohup bash -c '
 每文件 2000 条 ≈ 86 秒；每规模 11 文件 ≈ 16 分钟；三个规模整轮 ≈ 48 分钟。
 关闭 baseline（`"measure_baseline": false`）约减半。
 
+## 2.1 吞吐预期与 LLM 采样（重要）
+
+实测（本机，IoTDB 真实执行 + baseline 双执行）：
+
+| 配置 | 每查询耗时 | 一个文件（2000 条） | 三规模全量（6.6 万条） |
+|---|---|---|---|
+| 无 LLM（provider=none） | ≈43ms | ≈1.5 分钟 | ≈47 分钟 |
+| LLM 全开（本地 Qwen3-8B，每条 4 次调用） | ≈6.6s | ≈3.7 小时 | ≈5 天（不推荐全量） |
+| `"sample_rate": 10`（每 10 条启用一次 LLM） | ≈0.7s | ≈23 分钟 | ≈13 小时 |
+| `"sample_rate": 50` | ≈0.17s | ≈6 分钟 | ≈3.2 小时 |
+
+配置 `llm.sample_rate`（整数 N，默认 1=全开）：每条查询照常产出完整结构化结果，
+LLM 增强只在每 N 条采样启用（未采样的查询 `llm_analysis.available=false`，
+确定性字段不受影响）。实验建议：全量用无 LLM 或 sample_rate=50 积累知识与
+结果；需要 LLM 增强样本时用 sample_rate=10 或全开跑抽样文件。
+
 ## 3. 运行中你会看到什么
 
 每查询一行摘要：
@@ -90,12 +132,24 @@ nohup bash -c '
 
 ## 4. 产出与解读
 
-| 产出 | 位置 | 用途 |
+每次运行 `mataof run` 产生以下产物（**每次运行都是新文件，绝不覆盖历史结果**）：
+
+| 产出 | 位置 | 内容 |
 |---|---|---|
-| 完整追踪 | `results/round_{dbs,dbm,dbl}/<query_id>.json` | 单条查询的完整决策链（分析→决策→执行→监控→入库） |
-| 汇总日志 | `results/round_{dbs,dbm,dbl}/run_log.jsonl` | 逐行 JSON：类型/策略/状态/评估/异常/延迟/置信度，可直接用 pandas 统计 |
-| 知识库 | `data/knowledge_{dbs,dbm,dbl}.json` | append-only 历史经验（跨轮累积） |
-| 知识库统计 | `mataof stats --config config.dbs.json` | 逐策略 total/success/failure/成功率/平均延迟 |
+| 完整追踪 | `results/<results_dir>/<query_id>.json` | 单条查询的完整决策链：analysis（含 llm_analysis）→ knowledge_retrieval → decision（含 llm_analysis）→ execution（原始实测）→ monitoring（含 llm_analysis）→ knowledge_update |
+| 汇总日志 | `results/<results_dir>/run_log.jsonl` | **追加**的逐行 JSON：query_id、source（来源文件）、query_type、strategy_id、decision_status、execution_status、performance_assessment、anomaly_count、response_time_ms、knowledge_confidence、stored——可直接 pandas 统计 |
+| 知识库 | `data/<knowledge_store>.json` | append-only 历史经验（跨运行累积；含 LLM 经验总结 llm_note） |
+| LLM 调用日志 | `data/llm_log.jsonl`（配置 log_file） | 每次 LLM 调用的时间/延迟/状态（含失败原因） |
+| 终端摘要 | stdout | 每查询一行（query_id/类型/策略/状态/评估/异常/知识置信度） |
+
+**命名规则**（防止同名覆盖）：
+- 自动 query_id = `<run_id>-<序号>`，run_id 为每次运行的时戳
+  （如 `20260921-143012-0001`）；`--file` 运行时 trace 与 run_log 附带
+  `source` 字段记录来源文件名；
+- 极端同名冲突时自动追加 `-2`、`-3` 后缀，**绝不覆盖既有文件**。
+
+**查询知识库统计**：`mataof stats --config config.dbs.json`（逐策略
+total/success/failure/成功率/平均延迟）。
 
 示例分析：
 ```bash

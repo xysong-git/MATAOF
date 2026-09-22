@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from typing import Optional
 
 from mataof.runner import PipelineRunner, RunnerConfig, load_config_file
@@ -33,33 +34,31 @@ def _build_runner(args) -> PipelineRunner:
 
 def _cmd_run(args) -> int:
     runner = _build_runner(args)
-    queries: list[tuple[str, str]] = []
-    for q in getattr(args, "query", None) or []:
-        queries.append((q, ""))
-    if getattr(args, "file", None):
-        if args.file.endswith(".jsonl"):
-            with open(args.file, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    item = json.loads(line)
-                    queries.append((str(item.get("query") or ""), str(item.get("query_id") or "")))
-        else:
-            from mataof.runner import split_sql_statements
-            with open(args.file, encoding="utf-8") as f:
-                text = f.read()
-            queries.extend((s, "") for s in split_sql_statements(text))
-    if not queries:
+    pos_queries = list(getattr(args, "query", None) or [])
+
+    # 位置参数查询：全局 --limit 截断（--file 模式下 --limit 自动作为每文件上限）
+    global_limit = getattr(args, "limit", None)
+    if args.file and getattr(args, "per_file_limit", None) is None:
+        args.per_file_limit = global_limit
+        global_limit = None
+    if global_limit:
+        pos_queries = pos_queries[: int(global_limit)]
+
+    if not pos_queries and not args.file:
         print("错误：请提供查询（位置参数或 --file）", file=sys.stderr)
         return 2
 
-    if getattr(args, "limit", None):
-        queries = queries[: int(args.limit)]
-    traces = []
-    for query, query_id in queries:
-        trace = runner.run_query(query, query_id=query_id)
-        traces.append(trace)
+    t_batch = time.time()
+    traces = [runner.run_query(q) for q in pos_queries]
+    if args.file:
+        traces.extend(runner.run_file(
+            args.file,
+            per_file_limit=getattr(args, "per_file_limit", None),
+            sample_mode=getattr(args, "sample", None),
+            sample_seed=getattr(args, "seed", None),
+        ))
+    total_time_s = round(time.time() - t_batch, 2)
+    for trace in traces:
         mon = trace["monitoring"]
         # --json 模式：摘要走 stderr，stdout 只输出纯 JSON（机器可读）
         out = sys.stderr if args.json else sys.stdout
@@ -69,8 +68,16 @@ def _cmd_run(args) -> int:
               f"anomalies={len(mon['anomalies'])} | "
               f"knowledge_conf={trace['knowledge_retrieval']['knowledge_confidence']}",
               file=out)
+
+    # ---- 批次执行汇总（P50/P95/P99 等统计只在此生成：多样本 + 真实数据）----
+    from mataof.report import batch_summary, format_batch_summary
+    summary = batch_summary(traces, total_time_s=total_time_s)
     if args.json:
-        print(json.dumps(traces, ensure_ascii=False))
+        # stdout 纯 JSON：{traces, batch_summary}（机器可读）
+        print(json.dumps({"traces": traces, "batch_summary": summary}, ensure_ascii=False))
+    else:
+        print()
+        print(format_batch_summary(summary))
     return 0
 
 
@@ -119,7 +126,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="运行查询（四 Agent 闭环）")
     p_run.add_argument("query", nargs="*", help="查询 SQL（可多条）")
     p_run.add_argument("--file", help="查询文件（.sql 按分号拆分；.jsonl 每行 {query_id, query}）")
-    p_run.add_argument("--limit", type=int, help="最多运行的查询数（按文件顺序截取）")
+    p_run.add_argument("--limit", type=int, help="最多运行的查询数（位置参数截取；与 --file 联用时等价于 --per-file-limit）")
+    p_run.add_argument("--per-file-limit", type=int,
+                       help="每个 SQL 文件最多取多少条语句（--file 模式；默认全量）")
+    p_run.add_argument("--sample", choices=["seq", "random"], default=None,
+                       help="每文件取样方式：seq=顺序前 N 条（默认）/ random=随机抽样")
+    p_run.add_argument("--seed", type=int, default=None,
+                       help="random 抽样种子（默认 42；同种子 → 同抽样结果，可复现）")
     p_run.add_argument("--config", help="JSON 配置文件")
     p_run.add_argument("--results-dir", help="追踪输出目录（覆盖配置）")
     p_run.add_argument("--json", action="store_true", help="stdout 输出 JSON")

@@ -301,6 +301,47 @@ def test_determinism():
     assert r1 == r2
 
 
+def test_retrieve_max_records_truncation():
+    km = KnowledgeMemoryAgent()
+    for i in range(6):
+        _ingest(km, f"p{i}", NARROW_Q, SID_PRUNE, PRUNE,
+                {"response_time_ms": 10.0 + i}, {"response_time_ms": 50.0})
+    r = km.retrieve(analyze(NARROW_Q, query_id="new"), max_records=3)
+    assert len(r["matched_records"]) == 3
+    assert len(r["matched_records_for_decision"]) == 3
+    assert r["truncated"] == {"listed": 3, "total_matched": 6}
+    # summary 统计仍基于全部 6 条匹配
+    stats = r["historical_summary"]["strategy_statistics"][SID_PRUNE]
+    assert stats["total"] == 6
+    # 截断按相似度取 top-K（第一条相似度最高）
+    sims = [m["similarity"] for m in r["matched_records"]]
+    assert sims == sorted(sims, reverse=True)
+
+
+def test_retrieve_no_truncation_by_default():
+    km = KnowledgeMemoryAgent()
+    for i in range(3):
+        _ingest(km, f"p{i}", NARROW_Q, SID_PRUNE, PRUNE,
+                {"response_time_ms": 10.0 + i}, {"response_time_ms": 50.0})
+    r = km.retrieve(analyze(NARROW_Q, query_id="new"))
+    assert len(r["matched_records"]) == 3   # API 默认不截断
+    assert r["truncated"] is None
+
+
+def test_runner_evidence_bounded(tmp_path):
+    # runner 默认 knowledge_max_records=100：证据清单有界
+    rf = tmp_path / "results.json"
+    rf.write_text(json.dumps({"results": []}), encoding="utf-8")
+    from mataof.runner import PipelineRunner, RunnerConfig
+    runner = PipelineRunner(RunnerConfig(
+        results_dir=str(tmp_path / "results"),
+        executor={"type": "file", "results_file": str(rf)},
+    ))
+    trace = runner.run_query(NARROW_Q, query_id="q1")
+    used = [h for h in trace["decision"]["evidence"]["historical_records"] if h.get("record_id")]
+    assert len(used) <= 100
+
+
 def test_stats():
     km = KnowledgeMemoryAgent()
     _seed(km)

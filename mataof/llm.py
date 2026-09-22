@@ -48,11 +48,26 @@ def _log_call(log_file: Optional[str], entry: dict) -> None:
         pass
 
 
+def _is_local_host(url: str) -> bool:
+    """本地/回环地址（本地 vLLM 等推理服务不应绕经系统代理）。"""
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+        return host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local")
+    except Exception:
+        return False
+
+
 def _post_json(url: str, payload: dict, headers: dict,
                timeout_s: float) -> tuple[int, str]:
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+    if _is_local_host(url):
+        # 本地推理服务直连，绕过系统代理（http_proxy 等环境变量）
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    else:
+        opener = urllib.request.build_opener()   # 远程 API 遵循系统代理配置
+    with opener.open(req, timeout=timeout_s) as resp:
         body = resp.read().decode("utf-8", errors="replace")
         return resp.status, body
 
@@ -68,6 +83,7 @@ class OpenAICompatClient(LLMClient):
     def __init__(self, base_url: str, model: str, api_key: str,
                  timeout_s: float = 60.0, max_tokens: int = 2048,
                  log_file: Optional[str] = None,
+                 extra_body: Optional[dict] = None,
                  _post: Optional[Callable[..., tuple[int, str]]] = None):
         self.base_url = str(base_url).rstrip("/")
         self.model = str(model)
@@ -75,6 +91,7 @@ class OpenAICompatClient(LLMClient):
         self.timeout_s = float(timeout_s)
         self.default_max_tokens = int(max_tokens)
         self.log_file = log_file
+        self.extra_body = extra_body or {}
         self._post = _post or _post_json
 
     def chat(self, messages: list[dict], max_tokens: int = 0,
@@ -86,14 +103,16 @@ class OpenAICompatClient(LLMClient):
             "max_tokens": max_tokens or self.default_max_tokens,
         }
         try:
+            payload = {
+                "model": self.model,
+                "messages": messages,
+                "max_tokens": max_tokens or self.default_max_tokens,
+                "stream": False,
+            }
+            payload.update(self.extra_body)   # 透传 vLLM 等实现的扩展参数
             status, body = self._post(
                 f"{self.base_url}/chat/completions",
-                {
-                    "model": self.model,
-                    "messages": messages,
-                    "max_tokens": max_tokens or self.default_max_tokens,
-                    "stream": False,
-                },
+                payload,
                 {
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {self.api_key}",
@@ -190,7 +209,10 @@ def build_llm_client(spec: Optional[dict]) -> Optional[LLMClient]:
             return None   # 缺配置 → 静默降级（规则路径照常）
         return OpenAICompatClient(base_url=base_url, model=model, api_key=api_key,
                                   timeout_s=timeout_s, max_tokens=max_tokens,
-                                  log_file=log_file)
+                                  log_file=log_file,
+                                  extra_body=spec.get("extra_body")
+                                             if isinstance(spec.get("extra_body"), dict)
+                                             else None)
     if provider == "local":
         url = spec.get("url")
         if not url:

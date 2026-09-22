@@ -74,7 +74,12 @@ Strategy + Execution Metrics + Execution Result + Timestamp）：
   avg_latency_ms；
 - `knowledge_confidence`：min(1.0, 0.25×strong + 0.15×moderate + 0.05×weak)；
 - `matched_records_for_decision`（扩展）：决策 Agent 契约格式的记录列表，可直接作为
-  `historical_records` 输入。
+  `historical_records` 输入；
+- **top-K 截断**：`max_records` 参数（API 默认 None 不截断；runner 默认 100，
+  配置 `knowledge_max_records`）按相似度取 top-K 返回——知识库累积成千上万条时，
+  防止证据清单与结果文件无限膨胀、每查询检索开销线性增长；
+  截断说明写入 `truncated` 字段（`{"listed": 100, "total_matched": 1121}`）；
+  `historical_summary` 的成功率/模式统计**始终基于全部匹配记录**计算，不受截断影响。
 
 ## 5. 反馈更新（`agent.update`）
 

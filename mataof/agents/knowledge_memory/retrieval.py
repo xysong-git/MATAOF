@@ -88,12 +88,17 @@ def _strategy_records(matched: list, strategy_id: str) -> list:
 
 
 def retrieve(store, query_analysis: dict, database_state: Optional[dict],
-             system_state: Optional[dict], query_id: str = "") -> dict:
+             system_state: Optional[dict], query_id: str = "",
+             max_records: Optional[int] = None) -> dict:
     """检索与当前查询上下文相关的历史知识。
 
     store          ：MemoryStore
     query_analysis ：Query Analysis Agent 输出（提供查询特征）
     database_state / system_state：当前上下文（可选）
+    max_records    ：返回的匹配记录上限（按相似度 top-K）。
+                     None → 不截断（API 默认）；runner 默认 100（控制证据规模）。
+                     historical_summary 的统计始终基于全部匹配记录计算，
+                     截断只影响 matched_records / matched_records_for_decision 列表。
     """
     from mataof.similarity import compact_features
 
@@ -118,9 +123,16 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
     # 排序：综合相似度降序，record_id 升序（确定性）
     matched.sort(key=lambda m: (-m["overall"], m["record"]["record_id"]))
 
+    # ---- top-K 截断（summary 统计仍基于全部匹配）----
+    listed = matched
+    truncated: Optional[dict] = None
+    if max_records is not None and int(max_records) > 0 and len(matched) > int(max_records):
+        listed = matched[: int(max_records)]
+        truncated = {"listed": len(listed), "total_matched": len(matched)}
+
     # ---- matched_records（规格输出）----
     matched_records: list[dict] = []
-    for m in matched:
+    for m in listed:
         rec = m["record"]
         strat = rec.get("strategy") or {}
         metrics = (rec.get("execution") or {}).get("metrics") or {}
@@ -204,8 +216,9 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
     knowledge_confidence = round(min(1.0, 0.25 * n_strong + 0.15 * n_moderate + 0.05 * n_weak), 2)
 
     # ---- 决策 Agent 兼容记录（扩展：可直接作为 historical_records 输入）----
+    # 同样按 top-K 截断（决策证据规模有界）；summary 统计不受影响
     records_for_decision: list[dict] = []
-    for m in matched:
+    for m in listed:
         rec = m["record"]
         lat = _latency_of(rec)
         records_for_decision.append({
@@ -232,4 +245,5 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
         "knowledge_confidence": knowledge_confidence,
         "matched_records_for_decision": records_for_decision,   # 扩展
         "match_counts": {"strong": n_strong, "moderate": n_moderate, "weak": n_weak},  # 扩展
+        "truncated": truncated,                                  # 扩展：top-K 截断说明（未截断为 null）
     }
