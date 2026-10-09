@@ -10,7 +10,9 @@
     "fetch_size": 1024,
     "measure_baseline": true
   },
-  "database_state": {"data_scale_level": "small"},
+  "database_state": {
+    "data_scale_level": "small"
+  },
   "system_state": {},
   "candidate_strategies": null,
   "baseline_strategy": null,
@@ -24,7 +26,16 @@
     "timeout_s": 180,
     "max_tokens": 1024,
     "log_file": "data/llm_log.jsonl",
-    "extra_body": {"chat_template_kwargs": {"enable_thinking": false}},
-    "preference_bonus": false
-  }
+    "extra_body": {
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    "preference_bonus": false,
+    "sample_rate": 10,
+    "async_enhance": true,
+    "async_workers": 2,
+    "cache_file": "data/llm_cache_local-llm.json"
+  },
+  "knowledge_save_interval": 20
 }

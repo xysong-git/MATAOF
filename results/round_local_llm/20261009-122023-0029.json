@@ -1,0 +1,1239 @@
+{
+  "query_id": "20261009-122023-0029",
+  "query": "SELECT s_441, s_341 FROM root.dbs.g_0.d_16, root.dbs.g_0.d_17 WHERE time = 1640968925000",
+  "source": "q1.sql",
+  "sampling": {
+    "mode": "random",
+    "limit": 10,
+    "total": 2000,
+    "seed": 42
+  },
+  "analysis": {
+    "query_id": "20261009-122023-0029",
+    "query": "SELECT s_441, s_341 FROM root.dbs.g_0.d_16, root.dbs.g_0.d_17 WHERE time = 1640968925000",
+    "query_type": "point_query",
+    "query_features": {
+      "time": {
+        "has_time_filter": true,
+        "start_time": 1640968925000,
+        "end_time": 1640968925000,
+        "time_span": 0,
+        "range_level": "narrow",
+        "time_condition_form": "equality",
+        "time_filter_expressions": [
+          "time = 1640968925000"
+        ]
+      },
+      "device": {
+        "has_device_filter": true,
+        "device_count": 2,
+        "multi_device": true,
+        "device_paths": [
+          "root.dbs.g_0.d_16",
+          "root.dbs.g_0.d_17"
+        ],
+        "device_condition_count": 2
+      },
+      "filter": {
+        "filter_count": 1,
+        "filter_types": [
+          "time"
+        ],
+        "selectivity": {},
+        "conditions": [
+          {
+            "expression": "time = 1640968925000",
+            "type": "time",
+            "column": "time",
+            "operator": "eq",
+            "value": "1640968925000"
+          }
+        ],
+        "type_counts": {
+          "time": 1
+        },
+        "combination": {
+          "op": "leaf",
+          "index": 0
+        }
+      },
+      "aggregation": {
+        "has_aggregation": false,
+        "aggregation_functions": [],
+        "has_group_by": false,
+        "has_window": false,
+        "group_by_details": null,
+        "aggregation_scope": {
+          "from_paths": [
+            "root.dbs.g_0.d_16",
+            "root.dbs.g_0.d_17"
+          ],
+          "time_bounds": [
+            1640968925000,
+            1640968925000
+          ],
+          "window_range": null,
+          "has_non_time_filters": false,
+          "description": "设备范围：root.dbs.g_0.d_16, root.dbs.g_0.d_17；时间范围：[1640968925000, 1640968925000]（毫秒）"
+        }
+      },
+      "scan": {
+        "estimated_scan_range": null,
+        "scan_level": "unknown",
+        "possible_large_scan": false,
+        "has_obvious_filter_conditions": true,
+        "possible_large_intermediate_result": false
+      }
+    },
+    "optimization_relevant_features": {
+      "time_pruning": [
+        "查询包含明确时间过滤条件（形式 equality，时间跨度 0 ms，范围等级 narrow），Time Pruning 属于相关候选优化维度。"
+      ],
+      "filter_order": [],
+      "aggregation_placement": []
+    },
+    "unknown_features": [
+      "选择率：数据库未提供选择率数据，不做估计",
+      "预计扫描范围：unknown（未提供数据库统计信息，不自行估计）"
+    ],
+    "analysis_confidence": 0.95,
+    "feature_vector": {
+      "dims": [
+        "time_span_log",
+        "device_count_norm",
+        "filter_time_count",
+        "filter_value_count",
+        "filter_tag_count",
+        "aggregation_count",
+        "selectivity_avg",
+        "scan_level_norm",
+        "query_type=point_query",
+        "query_type=range_query",
+        "query_type=predicate_filter_query",
+        "query_type=window_aggregation_query",
+        "query_type=complex_composite_query",
+        "query_type=unknown",
+        "range_level=narrow",
+        "range_level=medium",
+        "range_level=wide",
+        "range_level=unknown",
+        "has_time_filter",
+        "has_device_filter",
+        "multi_device",
+        "has_aggregation",
+        "has_group_by",
+        "has_window"
+      ],
+      "values": [
+        0.0,
+        0.002,
+        0.1,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "llm_analysis": {
+      "available": true,
+      "semantic_summary": "查询指定时间点上两个设备的特定字段值。",
+      "query_type_hint": "point_query",
+      "condition_hints": {},
+      "notes": []
+    },
+    "schema_version": "1.0"
+  },
+  "knowledge_retrieval": {
+    "matched_count": 100,
+    "knowledge_confidence": 1.0
+  },
+  "decision": {
+    "query_id": "20261009-122023-0029",
+    "decision": {
+      "time_pruning": {
+        "strategy": "partition_pruning",
+        "reason": "时间边界已知（[1640968925000, 1640968925000]，跨度 0 ms，narrow）；时间范围 narrow（+0.10）；历史证据 100 条（加权 1.00，加权平均延迟 12.8 ms，相对最优比例 0.30，+0.07）；策略评价表先验（同类上下文 57 次，成功率 0.7368，+0.05）；排除：chunk_level_filtering；在当前信息条件下选择 partition_pruning（score 0.7713）。",
+        "confidence": 1.0,
+        "equivalent_sql": null
+      },
+      "filter_order": {
+        "strategy": "not_applicable",
+        "reason": "非时间过滤条件数为 0（<2），过滤顺序无意义",
+        "confidence": 0.0,
+        "equivalent_sql": null
+      },
+      "aggregation_placement": {
+        "strategy": "not_applicable",
+        "reason": "查询不含聚合",
+        "confidence": 0.0,
+        "equivalent_sql": null
+      }
+    },
+    "selected_strategy": {
+      "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+      "strategy_parameters": {
+        "time_pruning": {
+          "start_time": 1640968925000,
+          "end_time": 1640968925000
+        }
+      },
+      "equivalent_sql": "SELECT s_441, s_341 FROM root.dbs.g_0.d_16, root.dbs.g_0.d_17 WHERE time = 1640968925000"
+    },
+    "evidence": {
+      "query_features": [
+        "time.has_time_filter=true",
+        "time.time_span=0ms",
+        "time.range_level=narrow"
+      ],
+      "database_state": [
+        "database_state.data_scale_level=small"
+      ],
+      "system_state": [
+        "system_state 未提供（视为 unknown）"
+      ],
+      "historical_records": [
+        {
+          "record_id": "rec00001116",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001117",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001118",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001119",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001120",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001121",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001122",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001123",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001124",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001125",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001126",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001127",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001128",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001129",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001130",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001131",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001132",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001133",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001134",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001135",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001136",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001137",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001179",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001180",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001181",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001182",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001183",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001184",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001185",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001186",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001187",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001188",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001289",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001290",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001291",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001292",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001293",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001294",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001295",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001296",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001297",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001298",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001399",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001400",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001401",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001402",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001403",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001404",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001405",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001406",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001407",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001408",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001509",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001510",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001511",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001512",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001513",
+          "similarity": 0.925,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00000001",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001189",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001190",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001191",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001192",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001193",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001194",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001195",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001196",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001197",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001198",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001259",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001260",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001261",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001262",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001263",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001264",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001265",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001266",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001267",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001268",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001299",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001300",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001301",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001302",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001303",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001304",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001305",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001306",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001307",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001308",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001369",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001370",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001371",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001372",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001373",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001374",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001375",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001376",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001377",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001378",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001409",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": "rec00001410",
+          "similarity": 0.7671,
+          "used_for": [
+            "time_pruning",
+            "filter_order",
+            "aggregation_placement"
+          ]
+        },
+        {
+          "record_id": null,
+          "summary": {
+            "considered": 100,
+            "used": 100,
+            "below_similarity_threshold": 0,
+            "invalid": 0
+          }
+        }
+      ]
+    },
+    "overall_confidence": 0.98,
+    "fallback_strategy": "",
+    "decision_status": "success",
+    "notes": [
+      "排除 chunk_level_filtering：需求不满足：缺少/不满足 database_state.physical_organization.chunk_level（known）"
+    ],
+    "llm_analysis": {
+      "available": true,
+      "semantic_reason": "基于时间范围狭窄且历史策略表现良好，选择partition_pruning进行时间剪枝。",
+      "preferences": {
+        "time_pruning": [
+          "partition_pruning"
+        ]
+      },
+      "notes": []
+    }
+  },
+  "execution": {
+    "execution_status": "success",
+    "failure_reason": null,
+    "metrics": {
+      "response_time_ms": 8.69,
+      "cpu_utilization": 0.141,
+      "cpu_utilization_peak": 0.141,
+      "memory_utilization": 0.529,
+      "memory_utilization_peak": 0.529
+    },
+    "baseline_metrics": {
+      "response_time_ms": 12.21,
+      "cpu_utilization": 0.222,
+      "cpu_utilization_peak": 0.222,
+      "memory_utilization": 0.529,
+      "memory_utilization_peak": 0.529
+    },
+    "timestamp": 1791519735275
+  },
+  "monitoring": {
+    "query_id": "20261009-122023-0029",
+    "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
+    "execution_status": "success",
+    "failure_reason": null,
+    "metrics": {
+      "response_time_ms": 8.69,
+      "p50_latency_ms": null,
+      "p95_latency_ms": null,
+      "p99_latency_ms": null,
+      "throughput": null,
+      "cpu_utilization": 0.141,
+      "cpu_utilization_peak": 0.141,
+      "memory_utilization": 0.529,
+      "memory_utilization_peak": 0.529,
+      "io_throughput": null
+    },
+    "baseline_comparison": {
+      "available": true,
+      "latency_change_percent": -28.83,
+      "p95_change_percent": null,
+      "p99_change_percent": null,
+      "throughput_change_percent": null,
+      "cpu_change_percent": -36.49,
+      "memory_change_percent": 0.0,
+      "io_change_percent": null
+    },
+    "performance_change": [
+      "latency_reduction",
+      "cpu_decrease"
+    ],
+    "performance_assessment": "improved",
+    "anomalies": [],
+    "feedback": {
+      "strategy_effective": true,
+      "confidence": 0.7,
+      "assessment_basis": [
+        "response_time_ms: 实测 8.69 ms vs baseline（变化 -28.83%）"
+      ],
+      "scope": "single_execution"
+    },
+    "llm_analysis": {
+      "available": true,
+      "performance_summary": "执行成功，响应时间8.69ms，CPU利用率14.1%，内存利用率52.9%，性能提升。",
+      "anomaly_summary": null,
+      "notes": [
+        "异步生成（B4）"
+      ]
+    },
+    "notes": []
+  },
+  "knowledge_update": {
+    "update_type": "new_record",
+    "record_id": "rec00001517",
+    "stored": true,
+    "strategy_effect": "improved",
+    "knowledge_update": {
+      "success_record": true,
+      "failure_record": false,
+      "strategy_priority_change": null
+    },
+    "notes": [
+      "历史记录已追加存储：rec00001517（append-only，不修改/删除既有记录）"
+    ],
+    "llm_analysis": {
+      "available": true,
+      "experience_note": "使用时间剪枝和分区剪枝策略，在CPU利用率降低36.49%、内存利用率不变的条件下，实现性能提升。",
+      "notes": [
+        "异步生成；未写入知识库记录（append-only 原则）"
+      ]
+    },
+    "strategy_evaluation_updates": {
+      "point_query|time_pruning|partition_pruning": {
+        "count": 61,
+        "success": 46,
+        "success_ratio": 0.7541,
+        "avg_latency_ms": 13.13
+      }
+    }
+  }
+}

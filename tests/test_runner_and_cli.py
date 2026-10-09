@@ -227,13 +227,47 @@ def test_cli_run_file(tmp_path):
     assert main(["run", "--config", cfg, "--file", str(f)]) == 0
 
 
+def test_cli_multiple_files(tmp_path):
+    rf = _results_file(tmp_path, [])
+    results_dir = str(tmp_path / "results")
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"results_dir": results_dir,
+                               "executor": {"type": "file", "results_file": rf}}),
+                   encoding="utf-8")
+    f1 = tmp_path / "q1.sql"; f1.write_text(f"{NARROW_Q};", encoding="utf-8")
+    f2 = tmp_path / "q2.sql"; f2.write_text(f"{MEDIUM_Q};", encoding="utf-8")
+    # 模拟 shell 通配展开：--file 后跟多个文件
+    code = main(["run", "--config", str(cfg), "--file", str(f1), str(f2)])
+    assert code == 0
+    lines = (tmp_path / "results" / "run_log.jsonl").read_text(encoding="utf-8").splitlines()
+    query_lines = [l for l in lines if not json.loads(l).get("batch")]
+    assert len(query_lines) == 2
+    sources = {json.loads(l)["source"] for l in query_lines}
+    assert sources == {"q1.sql", "q2.sql"}
+
+
+def test_cli_path_like_positional_rejected(tmp_path):
+    cfg = _cfg(tmp_path)
+    f = tmp_path / "q9.sql"; f.write_text(f"{NARROW_Q};", encoding="utf-8")
+    # 位置参数是文件路径 → 明确报错，绝不把路径当 SQL 执行
+    code = main(["run", "--config", cfg, str(f)])
+    assert code == 2
+
+
+def test_cli_missing_file_rejected(tmp_path):
+    cfg = _cfg(tmp_path)
+    code = main(["run", "--config", cfg, "--file", str(tmp_path / "nope.sql")])
+    assert code == 2
+
+
 def test_cli_run_limit(tmp_path):
     f = tmp_path / "queries.sql"
     f.write_text(f"{NARROW_Q};{MEDIUM_Q};{NARROW_Q};", encoding="utf-8")
     cfg = _cfg(tmp_path, results_dir=str(tmp_path / "results"))
     assert main(["run", "--config", cfg, "--file", str(f), "--limit", "2"]) == 0
     log = (tmp_path / "results" / "run_log.jsonl").read_text(encoding="utf-8")
-    assert len(log.strip().splitlines()) == 2
+    query_lines = [l for l in log.strip().splitlines() if not json.loads(l).get("batch")]
+    assert len(query_lines) == 2
 
 
 def test_unique_query_ids_across_runs_no_overwrite(tmp_path):
@@ -334,8 +368,9 @@ def test_cli_per_file_limit_and_sample(tmp_path):
     assert code == 0
     lines = [json.loads(l) for l in
              (tmp_path / "results" / "run_log.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert len(lines) == 2
-    assert lines[0]["sampling"] == {"mode": "random", "limit": 2, "total": 5, "seed": 7}
+    query_lines = [l for l in lines if not l.get("batch")]
+    assert len(query_lines) == 2
+    assert query_lines[0]["sampling"] == {"mode": "random", "limit": 2, "total": 5, "seed": 7}
 
 
 def test_llm_sample_rate(tmp_path):

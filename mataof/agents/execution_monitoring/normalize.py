@@ -35,7 +35,9 @@ METRIC_SPECS: dict[str, dict] = {
     "p99_latency_ms": {"kind": "nonneg"},
     "throughput": {"kind": "nonneg"},
     "cpu_utilization": {"kind": "utilization"},
+    "cpu_utilization_peak": {"kind": "utilization"},      # 扩展：执行期 CPU 峰值
     "memory_utilization": {"kind": "utilization"},
+    "memory_utilization_peak": {"kind": "utilization"},   # 扩展：执行期内存峰值
     "io_throughput": {"kind": "nonneg"},
 }
 

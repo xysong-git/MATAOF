@@ -246,4 +246,5 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
         "matched_records_for_decision": records_for_decision,   # 扩展
         "match_counts": {"strong": n_strong, "moderate": n_moderate, "weak": n_weak},  # 扩展
         "truncated": truncated,                                  # 扩展：top-K 截断说明（未截断为 null）
+        "strategy_evaluations": store.evaluations(),             # 扩展：策略评价表（D1 动态权重）
     }

@@ -65,14 +65,26 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
     latency_samples: list = []
     baseline_samples: list = []
     assessments: dict = {}
+    cpu_samples: list = []
+    cpu_peak_samples: list = []
+    mem_samples: list = []
+    mem_peak_samples: list = []
 
     for t in traces:
         mon = t.get("monitoring") or {}
         st = mon.get("execution_status") or "unknown"
         status_counts[st] = status_counts.get(st, 0) + 1
-        lat = (t.get("execution") or {}).get("metrics", {}).get("response_time_ms")
+        metrics = (t.get("execution") or {}).get("metrics") or {}
+        lat = metrics.get("response_time_ms")
         if st == "success" and isinstance(lat, (int, float)) and not isinstance(lat, bool):
             latency_samples.append(float(lat))
+        for src, dst in (("cpu_utilization", cpu_samples),
+                         ("cpu_utilization_peak", cpu_peak_samples),
+                         ("memory_utilization", mem_samples),
+                         ("memory_utilization_peak", mem_peak_samples)):
+            v = metrics.get(src)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                dst.append(float(v))
         bl = (t.get("execution") or {}).get("baseline_metrics") or {}
         b_lat = bl.get("response_time_ms")
         if isinstance(b_lat, (int, float)) and not isinstance(b_lat, bool):
@@ -89,6 +101,13 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
             total_time_s = (max(stamps) - min(stamps)) / 1000.0
 
     success = status_counts.get("success", 0)
+    def _res_stats(samples: list) -> dict:
+        if not samples:
+            return {"samples": 0, "avg": None, "max": None}
+        return {"samples": len(samples),
+                "avg": round(sum(samples) / len(samples), 4),
+                "max": round(max(samples), 4)}
+
     return {
         "total_queries": total,
         "total_time_s": round(total_time_s, 2) if total_time_s is not None else None,
@@ -103,6 +122,12 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
         },
         "latency_ms": _latency_stats(latency_samples),
         "baseline_latency_ms": _latency_stats(baseline_samples),
+        "resource_utilization": {   # 开题报告 3.5：平均与峰值口径
+            "cpu": _res_stats(cpu_samples),
+            "cpu_peak": _res_stats(cpu_peak_samples),
+            "memory": _res_stats(mem_samples),
+            "memory_peak": _res_stats(mem_peak_samples),
+        },
         "assessment_distribution": assessments,
     }
 
@@ -131,5 +156,13 @@ def format_batch_summary(s: dict) -> str:
         lines.append(
             f"baseline 延迟（样本 {bl['samples']}）: avg {bl['avg_ms']}ms | "
             f"P50 {bl['p50_ms']}ms | P95 {bl['p95_ms']}ms | P99 {bl['p99_ms']}ms"
+        )
+    res = s.get("resource_utilization") or {}
+    cpu, cpu_peak = res.get("cpu") or {}, res.get("cpu_peak") or {}
+    mem, mem_peak = res.get("memory") or {}, res.get("memory_peak") or {}
+    if (cpu.get("samples") or mem.get("samples")):
+        lines.append(
+            f"资源（样本 {cpu.get('samples', 0)}）: CPU avg {cpu.get('avg')} / 峰值 {cpu_peak.get('avg')} | "
+            f"内存 avg {mem.get('avg')} / 峰值 {mem_peak.get('max')}"
         )
     return "\n".join(lines)

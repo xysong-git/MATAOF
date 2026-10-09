@@ -218,11 +218,12 @@ improved / unchanged / degraded；执行失败 → failed；无数据 → insuff
 
 ```bash
 # 四模式切换（对应开题报告 3.4.1 三组对照 + LLM 变体）
-bash scripts/run_experiment.sh --mode native   # Baseline 1：原生 IoTDB
-bash scripts/run_experiment.sh --mode fixed    # Baseline 2：固定策略
-bash scripts/run_experiment.sh --mode agent    # Ours：多智能体
-bash scripts/run_experiment.sh --mode llm      # Ours + LLM 增强
-# 公共参数：--query-dir / --scales / --files / --per-file-limit / --sample / --seed
+bash scripts/run_experiment.sh --mode native --per-file-limit 100 --sample random --seed 42
+bash scripts/run_experiment.sh --mode fixed  --per-file-limit 100 --sample random --seed 42 --workers 4
+bash scripts/run_experiment.sh --mode agent  --per-file-limit 100 --sample random --seed 42 --workers 4
+bash scripts/run_experiment.sh --mode llm    --per-file-limit 100 --sample random --seed 42 --workers 4
+# 公共参数：--query-dir / --scales / --files / --per-file-limit / --sample / --seed / --workers
 ```
-每轮结束自动输出批次统计：查询数、总用时、吞吐、成功率、效果分布、
-P50/P95/P99/平均/最大/最小延迟、baseline 延迟、CPU/内存平均与峰值。
+llm 模式默认异步增强（主链路与 agent 同速，LLM 解读后台补写）+ 输出缓存
+（第二轮起 LLM 开销趋零）。每轮结束自动输出批次统计：查询数、总用时、吞吐、
+成功率、效果分布、P50/P95/P99/平均/最大/最小延迟、baseline 延迟、CPU/内存平均与峰值。

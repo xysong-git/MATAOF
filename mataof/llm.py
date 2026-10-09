@@ -17,8 +17,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import threading
 import time
 import urllib.request
 from typing import Any, Callable, Optional
@@ -187,10 +189,84 @@ class LocalHTTPClient(LLMClient):
             return None
 
 
+def hash_messages(messages: list) -> str:
+    """对消息序列做稳定哈希（缓存键）。"""
+    return hashlib.sha256(
+        json.dumps(messages, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+class CachedLLMClient(LLMClient):
+    """LLM 输出缓存包装（B3）：同 prompt（含模型名）→ 直接返回缓存响应。
+
+    - 持久化写穿（cache_file JSON），线程安全；容量上限（默认 100k 条）；
+    - 缓存只缓存原始响应文本——各 Agent 的解析/校验照常执行，
+      编造检测等安全机制不受影响；
+    - 命中时不产生底层调用（LLM 开销趋零），统计在 log_file 中标记 cached。
+    """
+
+    name = "cached"
+
+    def __init__(self, inner: LLMClient, cache_file: str,
+                 max_entries: int = 100_000, log_file: Optional[str] = None):
+        self._inner = inner
+        self.cache_file = cache_file
+        self.max_entries = int(max_entries)
+        self.log_file = log_file
+        self._lock = threading.Lock()
+        self._entries: dict = {}
+        self._load()
+
+    def _load(self):
+        try:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and isinstance(data.get("entries"), dict):
+                    self._entries = data["entries"]
+        except (OSError, json.JSONDecodeError):
+            self._entries = {}
+
+    def _save(self):
+        try:
+            os.makedirs(os.path.dirname(self.cache_file) or ".", exist_ok=True)
+            tmp = self.cache_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"entries": self._entries}, f, ensure_ascii=False,
+                          separators=(",", ":"))
+            os.replace(tmp, self.cache_file)
+        except OSError:
+            pass
+
+    def chat(self, messages: list, max_tokens: int = 0,
+             timeout_s: float = 0.0) -> Optional[str]:
+        key = f"{getattr(self._inner, 'model', self._inner.name)}::{hash_messages(messages)}"
+        with self._lock:
+            if key in self._entries:
+                text = self._entries[key]
+                _log_call(self.log_file, {
+                    "ts": int(time.time() * 1000), "provider": "cached",
+                    "model": getattr(self._inner, "model", ""),
+                    "messages": len(messages), "status": "cache_hit",
+                })
+                return text
+        text = self._inner.chat(messages, max_tokens=max_tokens, timeout_s=timeout_s)
+        if text is not None:
+            with self._lock:
+                if len(self._entries) >= self.max_entries:
+                    # 容量保护：清掉最早一半（缓存是易失优化，不承担正确性）
+                    for k in list(self._entries.keys())[: self.max_entries // 2]:
+                        del self._entries[k]
+                self._entries[key] = text
+                self._save()
+        return text
+
+
 def build_llm_client(spec: Optional[dict]) -> Optional[LLMClient]:
     """按配置构造 LLM 客户端；provider=none/无配置/缺密钥 → None（安全降级）。
 
     OpenAI 兼容 API 的 api_key 支持配置文件或环境变量 LLM_API_KEY。
+    cache_file 非空时自动包一层 CachedLLMClient（B3）。
     """
     if not isinstance(spec, dict):
         return None
@@ -198,7 +274,9 @@ def build_llm_client(spec: Optional[dict]) -> Optional[LLMClient]:
     log_file = spec.get("log_file") or _DEFAULT_LOG
     timeout_s = float(spec.get("timeout_s") or 60.0)
     max_tokens = int(spec.get("max_tokens") or 2048)
+    cache_file = spec.get("cache_file")
 
+    client: Optional[LLMClient] = None
     if provider in ("none", ""):
         return None
     if provider == "openai":
@@ -207,17 +285,18 @@ def build_llm_client(spec: Optional[dict]) -> Optional[LLMClient]:
         api_key = spec.get("api_key") or os.environ.get("LLM_API_KEY") or ""
         if not base_url or not model or not api_key:
             return None   # 缺配置 → 静默降级（规则路径照常）
-        return OpenAICompatClient(base_url=base_url, model=model, api_key=api_key,
-                                  timeout_s=timeout_s, max_tokens=max_tokens,
-                                  log_file=log_file,
-                                  extra_body=spec.get("extra_body")
-                                             if isinstance(spec.get("extra_body"), dict)
-                                             else None)
-    if provider == "local":
+        client = OpenAICompatClient(base_url=base_url, model=model, api_key=api_key,
+                                    timeout_s=timeout_s, max_tokens=max_tokens,
+                                    log_file=log_file,
+                                    extra_body=spec.get("extra_body")
+                                               if isinstance(spec.get("extra_body"), dict)
+                                               else None)
+    elif provider == "local":
         url = spec.get("url")
-        if not url:
-            return None
-        return LocalHTTPClient(url=url, model=str(spec.get("model") or "local"),
-                               timeout_s=timeout_s, max_tokens=max_tokens,
-                               log_file=log_file)
-    return None
+        if url:
+            client = LocalHTTPClient(url=url, model=str(spec.get("model") or "local"),
+                                     timeout_s=timeout_s, max_tokens=max_tokens,
+                                     log_file=log_file)
+    if client is not None and isinstance(cache_file, str) and cache_file.strip():
+        client = CachedLLMClient(client, cache_file=cache_file.strip(), log_file=log_file)
+    return client

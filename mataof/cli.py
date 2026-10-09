@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from typing import Optional
@@ -29,6 +30,8 @@ def _build_runner(args) -> PipelineRunner:
         config = load_config_file(args.config)
     if getattr(args, "results_dir", None):
         config.results_dir = args.results_dir
+    if getattr(args, "run_id", None):
+        config.run_id = args.run_id
     return PipelineRunner(config)
 
 
@@ -36,28 +39,50 @@ def _cmd_run(args) -> int:
     runner = _build_runner(args)
     pos_queries = list(getattr(args, "query", None) or [])
 
+    # --file 支持多值（含 shell 通配展开）：扁平化 + 严格校验
+    files: list = []
+    for group in (getattr(args, "file", None) or []):
+        files.extend(group)
+    for f in files:
+        if not os.path.exists(f):
+            print(f"错误: 查询文件不存在: {f}（若使用通配符，请确认展开结果）", file=sys.stderr)
+            return 2
+        if not f.endswith((".sql", ".jsonl")):
+            print(f"错误: --file 只接受 .sql/.jsonl 文件: {f}", file=sys.stderr)
+            return 2
+
+    # 位置参数若像文件路径（如通配符展开残片）→ 明确报错，防止把路径当 SQL 执行
+    for q in pos_queries:
+        if q.endswith((".sql", ".jsonl")) or "*" in q or os.path.exists(q):
+            print(f"错误: 位置参数看起来是文件路径（{q}）——查询文件请用 --file 指定，"
+                  f"且 --file 须放在位置参数之后", file=sys.stderr)
+            return 2
+
     # 位置参数查询：全局 --limit 截断（--file 模式下 --limit 自动作为每文件上限）
     global_limit = getattr(args, "limit", None)
-    if args.file and getattr(args, "per_file_limit", None) is None:
+    if files and getattr(args, "per_file_limit", None) is None:
         args.per_file_limit = global_limit
         global_limit = None
     if global_limit:
         pos_queries = pos_queries[: int(global_limit)]
 
-    if not pos_queries and not args.file:
+    if not pos_queries and not files:
         print("错误：请提供查询（位置参数或 --file）", file=sys.stderr)
         return 2
 
     t_batch = time.time()
     traces = [runner.run_query(q) for q in pos_queries]
-    if args.file:
+    for f in files:
         traces.extend(runner.run_file(
-            args.file,
+            f,
             per_file_limit=getattr(args, "per_file_limit", None),
             sample_mode=getattr(args, "sample", None),
             sample_seed=getattr(args, "seed", None),
+            workers=getattr(args, "workers", 1),
         ))
     total_time_s = round(time.time() - t_batch, 2)
+    runner.wait_llm_tasks()   # B4：排空异步增强，保证 --json 输出含完整 llm_analysis
+    runner.append_batch_row(total_time_s, len(traces))   # 批次行（最终汇总用）
     for trace in traces:
         mon = trace["monitoring"]
         # --json 模式：摘要走 stderr，stdout 只输出纯 JSON（机器可读）
@@ -124,8 +149,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_run = sub.add_parser("run", help="运行查询（四 Agent 闭环）")
-    p_run.add_argument("query", nargs="*", help="查询 SQL（可多条）")
-    p_run.add_argument("--file", help="查询文件（.sql 按分号拆分；.jsonl 每行 {query_id, query}）")
+    p_run.add_argument("query", nargs="*", help="查询 SQL（可多条；若与 --file 混用，须放在 --file 之前）")
+    p_run.add_argument("--file", nargs="+", action="append",
+                       help="查询文件（.sql 按分号拆分；.jsonl 每行 {query_id, query}）；"
+                            "可多个、可重复，支持 shell 通配符展开")
     p_run.add_argument("--limit", type=int, help="最多运行的查询数（位置参数截取；与 --file 联用时等价于 --per-file-limit）")
     p_run.add_argument("--per-file-limit", type=int,
                        help="每个 SQL 文件最多取多少条语句（--file 模式；默认全量）")
@@ -133,6 +160,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="每文件取样方式：seq=顺序前 N 条（默认）/ random=随机抽样")
     p_run.add_argument("--seed", type=int, default=None,
                        help="random 抽样种子（默认 42；同种子 → 同抽样结果，可复现）")
+    p_run.add_argument("--workers", type=int, default=1,
+                       help="并行处理查询数（B2；>1 时查询级并发，结果按输入顺序输出）")
+    p_run.add_argument("--run-id", default=None,
+                       help="本轮运行标识（缺省自动按时戳生成；用于按轮次过滤汇总）")
     p_run.add_argument("--config", help="JSON 配置文件")
     p_run.add_argument("--results-dir", help="追踪输出目录（覆盖配置）")
     p_run.add_argument("--json", action="store_true", help="stdout 输出 JSON")

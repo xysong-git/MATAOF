@@ -46,13 +46,14 @@ class KnowledgeMemoryAgent:
     description = "历史查询/策略/执行结果的结构化存储、检索、关联与更新。"
 
     def __init__(self, store_path: Optional[str] = None,
-                 llm: Optional[object] = None):
+                 llm: Optional[object] = None, save_interval: int = 1):
         """store_path=None 时仅内存保存；给定路径时 JSON 持久化。
 
         llm：可选 LLMClient（混合增强模式）——只生成 llm_analysis 附加节与
         经验总结（llm_note），不影响检索与入库的确定性核心；失败自动兜底。
+        save_interval：批量落盘间隔（B5，默认 1=每次保存；大库实验建议 20~50）。
         """
-        self.store = MemoryStore(store_path)
+        self.store = MemoryStore(store_path, save_interval=save_interval)
         self.llm = llm
 
     # ------------------------------------------------------------------
@@ -88,9 +89,14 @@ class KnowledgeMemoryAgent:
     # ------------------------------------------------------------------
     # 更新（反馈入库）
     # ------------------------------------------------------------------
-    def update(self, feedback_input: dict) -> dict:
+    def update(self, feedback_input: dict,
+               experience_note: Optional[str] = None,
+               use_llm: bool = True) -> dict:
         """把一次完整执行（分析 + 决策 + 监控反馈）关联为历史记录并入库。
 
+        experience_note：预生成的经验总结（B1 合并路径：runner 已用一次合并
+        LLM 调用生成，此处直接使用，不再调 LLM）；
+        use_llm=False：跳过本方法的 LLM 调用（runner 合并路径专用）。
         返回规格输出（update_type / record_id / stored / strategy_effect /
         knowledge_update），notes 为扩展说明。
         """
@@ -113,11 +119,16 @@ class KnowledgeMemoryAgent:
             }
 
         # LLM 经验总结（llm_generated 元数据；失败 → 不写入，事实记录不变）
+        # B1 合并路径：runner 已用合并调用生成 experience_note（或未采样），
+        # 此处按参数直接使用，不再发起 LLM 调用。
         effect = record["execution_result"]
         llm_notes: list[str] = []
-        experience_note = request_experience_note(self.llm, feedback_input,
-                                                  {"stored": True, "strategy_effect": effect},
-                                                  llm_notes)
+        if experience_note is None and use_llm:
+            experience_note = request_experience_note(self.llm, feedback_input,
+                                                      {"stored": True, "strategy_effect": effect},
+                                                      llm_notes)
+        elif experience_note is None:
+            llm_notes.append("runner 合并路径：本次未生成 LLM 经验总结（未采样或调用失败）")
         if experience_note is not None:
             record["llm_note"] = experience_note
 
@@ -127,6 +138,8 @@ class KnowledgeMemoryAgent:
         record_id = self.store.add(record)
         after = self.store.statistics().get(sid, {})
         notes.extend(self._post_store_notes(record_id))
+        # 策略评价表更新（D1：反馈驱动的动态权重，派生聚合）
+        eval_updates = self.store.record_evaluation(record)
 
         failure_record = (
             effect in ("degraded", "failed")
@@ -160,6 +173,7 @@ class KnowledgeMemoryAgent:
             },
             "notes": notes,
             "llm_analysis": build_update_llm_analysis(experience_note, llm_notes),
+            "strategy_evaluation_updates": eval_updates,   # 扩展：评价表增量
         }
 
     def _post_store_notes(self, record_id: str) -> list:

@@ -10,10 +10,13 @@
     "fetch_size": 1024,
     "measure_baseline": true
   },
-  "database_state": {"data_scale_level": "small"},
+  "database_state": {
+    "data_scale_level": "small"
+  },
   "system_state": {},
   "candidate_strategies": null,
   "baseline_strategy": null,
   "thresholds": {},
-  "reference_time": null
+  "reference_time": null,
+  "knowledge_save_interval": 20
 }

@@ -64,6 +64,7 @@ class CandidateEvaluation:
     history_bonus: float
     system_bonus: float
     llm_bonus: float = 0.0                                # LLM 偏好加分（不参与门控）
+    eval_prior: float = 0.0                               # 策略评价表先验（D1，不参与门控）
     factor_labels: list = field(default_factory=list)     # 用于 reason 的可追踪说明
     equivalent_sql: Optional[str] = None                  # 候选提供方给出的等价 SQL
     parameters: Optional[dict] = None                     # 候选提供的执行级参数
@@ -265,9 +266,36 @@ def _gate_passed(eval_: CandidateEvaluation, ctx: DecisionContext,
     return ev.count_for(eval_.dimension, eval_.name) >= 2
 
 
+# D1：策略评价表先验（开题报告 2.2.3：依据执行反馈动态调整策略评价权重）
+# 权重是反馈的确定性函数：success_ratio → [-strength, +strength]；
+# 样本不足 min_count 时不产生先验（证据不足不虚增）；不参与风险门控。
+DEFAULT_EVAL_PRIOR_STRENGTH = 0.10
+DEFAULT_EVAL_MIN_COUNT = 3
+
+
+def _evaluation_prior(ctx: DecisionContext, evaluations: Optional[dict],
+                      dim: str, name: str, labels: list,
+                      strength: float, min_count: int) -> float:
+    if not evaluations:
+        return 0.0
+    key = f"{ctx.query_type or 'unknown'}|{dim}|{name}"
+    e = evaluations.get(key)
+    if not isinstance(e, dict) or e.get("count", 0) < min_count:
+        return 0.0
+    ratio = float(e.get("success_ratio") or 0.0)
+    prior = round(strength * (ratio - 0.5) * 2.0, 4)
+    labels.append(
+        f"策略评价表先验（同类上下文 {e['count']} 次，成功率 {ratio}，{prior:+.2f}）"
+    )
+    return prior
+
+
 def evaluate_dimension(dim: str, ctx: DecisionContext,
                        ev: HistoryEvidence,
-                       llm_preferences: Optional[dict] = None) -> DimensionResult:
+                       llm_preferences: Optional[dict] = None,
+                       evaluations: Optional[dict] = None,
+                       eval_prior_strength: float = DEFAULT_EVAL_PRIOR_STRENGTH,
+                       eval_min_count: int = DEFAULT_EVAL_MIN_COUNT) -> DimensionResult:
     """评估一个维度：候选过滤 → 评分 → 门控 → 选择/回退。"""
     result = DimensionResult(dimension=dim, applicable=False)
 
@@ -316,13 +344,16 @@ def evaluate_dimension(dim: str, ctx: DecisionContext,
         evl.context_bonus = _context_bonus(ctx, dim, name, labels)
         evl.history_bonus = _history_bonus(ev, dim, name, labels)
         evl.system_bonus = _system_bonus(ctx, name, labels)
+        # 策略评价表先验（D1）：反馈的确定性函数，有界，不参与风险门控
+        evl.eval_prior = _evaluation_prior(ctx, evaluations, dim, name, labels,
+                                           eval_prior_strength, eval_min_count)
         # LLM 偏好加分（实验性）：只影响总分，不参与风险门控——LLM 不能解锁策略
         prefs = (llm_preferences or {}).get(dim) or []
         if prefs and name == prefs[0]:
             evl.llm_bonus = 0.05
             labels.append("LLM 偏好加分（+0.05，实验性，不参与门控）")
         evl.score = round(evl.base + evl.context_bonus + evl.history_bonus
-                          + evl.system_bonus + evl.llm_bonus, 4)
+                          + evl.system_bonus + evl.llm_bonus + evl.eval_prior, 4)
         evl.gate_passed = _gate_passed(evl, ctx, ev)
         if not evl.gate_passed:
             evl.excluded_reason = "风险门控未通过（缺少足够的支撑信号/历史证据）"

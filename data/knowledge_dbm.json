@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "next_seq": 58,
+  "next_seq": 60,
   "records": {
     "rec00000001": {
       "query_record": {
@@ -3918,6 +3918,148 @@
       },
       "timestamp": 1789629078134,
       "record_id": "rec00000057"
+    },
+    "rec00000058": {
+      "query_record": {
+        "query_id": "20260922-163053-0001",
+        "query": "SELECT count(s_1666), count(s_1766) FROM root.dbm.g_0.d_0, root.dbm.g_0.d_1 WHERE time >= 1640966400000 AND time <= 1640966650000",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "count"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "medium"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640966400000,
+            "end_time": 1640966650000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 12.76,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.07,
+          "memory_utilization": 0.179,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1790065853097,
+      "record_id": "rec00000058"
+    },
+    "rec00000059": {
+      "query_record": {
+        "query_id": "20260922-163053-0002",
+        "query": "SELECT sum(s_1667), sum(s_1767) FROM root.dbm.g_0.d_2, root.dbm.g_0.d_3 WHERE time >= 1640966700000 AND time <= 1640966950000",
+        "query_features": {
+          "query_type": "complex_composite_query",
+          "time": {
+            "has_time_filter": true,
+            "time_span": 250000,
+            "range_level": "narrow"
+          },
+          "device": {
+            "device_count": 2,
+            "multi_device": true
+          },
+          "filter": {
+            "non_time_filter_count": 0
+          },
+          "aggregation": {
+            "has_aggregation": true,
+            "has_group_by": false,
+            "has_window": false,
+            "functions": [
+              "sum"
+            ]
+          }
+        }
+      },
+      "context": {
+        "database_state": {
+          "data_scale_level": "medium"
+        },
+        "system_state": {}
+      },
+      "strategy": {
+        "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=scan_level_aggregation",
+        "strategy_parameters": {
+          "time_pruning": {
+            "start_time": 1640966700000,
+            "end_time": 1640966950000
+          }
+        },
+        "by_dimension": {
+          "time_pruning": "partition_pruning",
+          "filter_order": "not_applicable",
+          "aggregation_placement": "scan_level_aggregation"
+        }
+      },
+      "execution": {
+        "status": "success",
+        "failure_reason": null,
+        "metrics": {
+          "response_time_ms": 11.87,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "throughput": null,
+          "cpu_utilization": 0.051,
+          "memory_utilization": 0.179,
+          "io_throughput": null
+        }
+      },
+      "execution_result": "improved",
+      "anomalies": [],
+      "experience": {
+        "effect": "improved",
+        "confidence": 0.7
+      },
+      "timestamp": 1790065853164,
+      "record_id": "rec00000059"
     }
   }
 }

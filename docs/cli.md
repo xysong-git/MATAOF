@@ -12,12 +12,15 @@ pip install -e .            # 安装后提供 mataof 命令；不安装也可用
 ```bash
 mataof run "SELECT ..."                    # 运行一条查询（四 Agent 闭环）
 mataof run --file queries.sql              # 批量运行（.sql 按分号拆分；.jsonl 每行 {query_id, query}）
+mataof run --file query/queries_dbs/q*.sql # 通配符展开为多文件，每文件分别取样
+mataof run --file queries.sql --workers 4  # 查询级并行（B2；LLM 模式建议 4）
 mataof retrieve "SELECT ..."               # 仅检索历史知识（不执行、不入库）
 mataof stats                               # 知识库累计统计
 ```
 
-公共参数：`--config CONFIG`（JSON 配置文件）、`--json`（stdout 输出机器可读 JSON）。
-`run` 另有 `--results-dir DIR` 覆盖追踪输出目录。
+`run` 参数：`--config CONFIG`、`--json`（stdout 机器可读 JSON）、
+`--results-dir DIR`、`--per-file-limit N`、`--sample seq|random`、`--seed N`、
+`--limit N`、`--workers N`（并行）。
 
 **批次执行汇总**：每次 `mataof run` 结束时打印本批次统计（数据全部来自本批次
 真实执行样本，绝不编造）：
@@ -125,7 +128,12 @@ bash $IOTDB/sbin/stop-standalone.sh      # 停止
   "model": "deepseek-chat",
   "timeout_s": 60,
   "max_tokens": 2048,
-  "log_file": "data/llm_log.jsonl"             // 调用日志（时间/延迟/状态，不含完整内容）
+  "log_file": "data/llm_log.jsonl",            // 调用日志（时间/延迟/状态）
+  "sample_rate": 10,                           // 每 N 条查询启用一次同步 LLM 增强（A1）
+  "async_enhance": true,                       // B4：异步增强（主链路零 LLM 调用）
+  "async_workers": 2,                          // 后台补写线程数
+  "cache_file": "data/llm_cache.json",         // B3：LLM 输出缓存（跨轮零开销）
+  "preference_bonus": false                    // LLM 参与评分（开启时强制同步模式）
 }
 ```
 
@@ -133,6 +141,10 @@ bash $IOTDB/sbin/stop-standalone.sh      # 停止
 - `provider=openai`：任何 OpenAI 兼容 API（DeepSeek/OpenAI/自建 vLLM）；
 - `provider=local`：本地推理服务（POST `{"messages", "max_tokens"}` → `{"text"}`，
   与 MAPO 的 FastAPI 服务形式一致）；
+- `async_enhance=true`（B4）：主链路为确定性快路径，LLM 解读由后台线程补写进
+  trace（批次结束自动排空）；`preference_bonus=true` 时强制回退同步；
+- `cache_file`（B3）：缓存只存原始响应文本，各 Agent 的解析/防编造校验照常执行；
+  消融实验对比 LLM 影响时清空缓存保证公平；
 
 **本地 vLLM + Qwen3 配置要点**（本机已验证，模板见 `config.local-llm.json`）：
 - `base_url` 指向 `http://127.0.0.1:8000/v1`，`model` 填服务端模型名

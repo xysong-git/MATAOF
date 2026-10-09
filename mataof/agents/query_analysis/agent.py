@@ -29,6 +29,7 @@ from typing import Optional
 
 from mataof.schemas import query_analysis_output_template
 from mataof.agents.query_analysis.llm_enhance import build_llm_analysis
+from mataof.agents.query_analysis.vectorize import encode_features
 from mataof.agents.query_analysis.parser import parse_query, ParseContext
 from mataof.agents.query_analysis.features import (
     time as time_features,
@@ -118,6 +119,9 @@ class QueryAnalysisAgent:
 
         # ---- LLM 语义增强（混合增强：只进 llm_analysis 节，失败不影响确定性结果）----
         output["llm_analysis"] = build_llm_analysis(query, output, llm)
+
+        # ---- 特征向量化（开题报告 3.3：固定维度向量，只由确定性特征编码）----
+        output["feature_vector"] = encode_features(output)
         return output
 
 

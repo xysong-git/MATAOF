@@ -21,7 +21,8 @@ REQUIRED_TOP_KEYS = {
 }
 METRIC_KEYS = {
     "response_time_ms", "p50_latency_ms", "p95_latency_ms", "p99_latency_ms",
-    "throughput", "cpu_utilization", "memory_utilization", "io_throughput",
+    "throughput", "cpu_utilization", "cpu_utilization_peak",
+    "memory_utilization", "memory_utilization_peak", "io_throughput",
 }
 
 

@@ -190,6 +190,10 @@ def query_analysis_output_template() -> dict:
         },
         "unknown_features": [],             # 所有标记为 unknown 的特征及其原因
         "analysis_confidence": 0.0,
+        "feature_vector": {                 # 扩展：高维特征向量（开题报告 3.3）
+            "dims": [],                     #   固定维度名（契约见 vectorize.py）
+            "values": [],                   #   归一化数值；未知维度一律 0（不编造）
+        },
         "llm_analysis": {                   # 扩展：LLM 语义增强（混合增强模式）
             "available": False,             #   LLM 未启用/失败 → false，确定性字段不受影响
             "semantic_summary": None,       #   LLM 生成的语义摘要（llm_generated）
@@ -290,7 +294,9 @@ def execution_monitoring_output_template() -> dict:
             "p99_latency_ms": None,
             "throughput": None,
             "cpu_utilization": None,       # 归一化为 0~1 小数
+            "cpu_utilization_peak": None,  # 扩展：执行期 CPU 峰值（开题报告 3.5）
             "memory_utilization": None,    # 归一化为 0~1 小数
+            "memory_utilization_peak": None,  # 扩展：执行期内存峰值
             "io_throughput": None,
         },
         "baseline_comparison": {

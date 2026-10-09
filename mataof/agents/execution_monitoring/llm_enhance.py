@@ -117,6 +117,59 @@ def parse_llm_json(text: str, notes: list) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
+def build_post_execution_llm(llm: LLMClient, monitoring_input: dict,
+                             monitoring_output: dict) -> dict:
+    """B1 合并调用：一次 LLM 调用同时产出监控解读与 KM 经验总结。
+
+    输入：监控输入（含 query/strategy 等）与确定性监控输出（事实）。
+    输出：{"performance_summary", "anomaly_summary", "experience_note", "notes"}
+    数字级校验对 performance/anomaly 字段生效（与独立调用口径一致）；
+    调用失败/非法 → 对应字段 None + notes，事实输出不受影响。
+    """
+    section = {
+        "performance_summary": None,
+        "anomaly_summary": None,
+        "experience_note": None,
+        "notes": [],
+    }
+    try:
+        text = llm.chat([
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": build_prompt(monitoring_output) + "\n\n"
+             "追加要求：再输出一个 experience_note 字段（<80字，中文，总结本次执行经验："
+             "什么策略在什么条件下表现如何；只陈述事实，单次观察不代表规律，不提建议；"
+             "若执行未成功，写失败现象即可）。输出仍是一个 JSON 对象。"
+             f"\n输入的 strategy_id 为：{monitoring_input.get('strategy_id') or ''}"},
+        ])
+    except Exception as exc:
+        section["notes"].append(f"合并 LLM 调用异常（{type(exc).__name__}），回退确定性路径")
+        return section
+    if text is None:
+        section["notes"].append("合并 LLM 调用失败（超时/网络/服务不可用），回退确定性路径")
+        return section
+    data = parse_llm_json(text, section["notes"])
+    if data is None:
+        return section
+
+    facts = _fact_numbers(monitoring_output)
+    summary = data.get("performance_summary")
+    if isinstance(summary, str) and summary.strip():
+        if number_consistency_check(summary, facts):
+            section["performance_summary"] = summary.strip()
+        else:
+            section["notes"].append("性能复述包含给定数据之外的数字（疑似编造），置为 null")
+    anomaly = data.get("anomaly_summary")
+    if isinstance(anomaly, str) and anomaly.strip():
+        if number_consistency_check(anomaly, facts):
+            section["anomaly_summary"] = anomaly.strip()
+        else:
+            section["notes"].append("异常解读包含给定数据之外的数字（疑似编造），置为 null")
+    note = data.get("experience_note")
+    if isinstance(note, str) and note.strip():
+        section["experience_note"] = note.strip()
+    return section
+
+
 def build_llm_analysis(llm: Optional[LLMClient], monitoring_output: dict) -> dict:
     """生成监控输出的 llm_analysis 节。llm=None/失败 → available=false（兜底）。"""
     section = {

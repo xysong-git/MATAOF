@@ -57,11 +57,15 @@ def classify_execution_error(exc: Exception) -> tuple[str, str]:
 
 
 class _CpuSampler:
-    """执行期间后台采样 CPU 利用率（真实测量；psutil 缺失时返回 None）。"""
+    """执行期间后台采样 CPU/内存利用率（真实测量；psutil 缺失时返回 None）。
+
+    输出平均与峰值两个口径（对应开题报告 3.5：平均与峰值利用率/峰值占用）。
+    """
 
     def __init__(self):
         self._stop = threading.Event()
-        self._samples: list[float] = []
+        self._cpu_samples: list[float] = []
+        self._mem_samples: list[float] = []
         self._thread: Optional[threading.Thread] = None
 
     def start(self):
@@ -71,31 +75,40 @@ class _CpuSampler:
         def _run():
             while not self._stop.is_set():
                 try:
-                    self._samples.append(psutil.cpu_percent(interval=None))
+                    self._cpu_samples.append(psutil.cpu_percent(interval=None))
+                    self._mem_samples.append(psutil.virtual_memory().percent)
                 except Exception:
                     break
                 self._stop.wait(0.05)
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
 
-    def stop(self) -> Optional[float]:
+    def stop(self) -> tuple[Optional[float], Optional[float]]:
+        """返回 (cpu_avg, cpu_peak)，归一化 0~1。"""
         if psutil is None:
-            return None
+            return None, None
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
-        if not self._samples:
-            return None
-        return round(sum(self._samples) / len(self._samples) / 100.0, 4)  # 归一化 0~1
+        if not self._cpu_samples:
+            return None, None
+        avg = round(sum(self._cpu_samples) / len(self._cpu_samples) / 100.0, 4)
+        peak = round(max(self._cpu_samples) / 100.0, 4)
+        return avg, peak
 
-    @staticmethod
-    def memory_utilization() -> Optional[float]:
+    def memory_utilization(self) -> tuple[Optional[float], Optional[float]]:
+        """返回 (mem_avg, mem_peak)，归一化 0~1。执行期样本优先，否则单次采样。"""
         if psutil is None:
-            return None
+            return None, None
         try:
-            return round(psutil.virtual_memory().percent / 100.0, 4)
+            current = psutil.virtual_memory().percent
         except Exception:
-            return None
+            return None, None
+        if self._mem_samples:
+            avg = round(sum(self._mem_samples) / len(self._mem_samples) / 100.0, 4)
+            peak = round(max(max(self._mem_samples), current) / 100.0, 4)
+            return avg, peak
+        return round(current / 100.0, 4), round(current / 100.0, 4)
 
 
 class IoTDBExecutor:
@@ -118,6 +131,7 @@ class IoTDBExecutor:
         self.measure_baseline = bool(measure_baseline)
         self._session_factory = session_factory or _IotdbSession
         self._session: Any = None
+        self._exec_lock = threading.Lock()   # Session 非线程安全：执行串行化（B2 并行）
 
     # ------------------------------------------------------------------
     def _open(self) -> Any:
@@ -169,12 +183,16 @@ class IoTDBExecutor:
 
         elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
         metrics["response_time_ms"] = elapsed_ms
-        cpu = sampler.stop()
-        if cpu is not None:
-            metrics["cpu_utilization"] = cpu
-        mem = _CpuSampler.memory_utilization()
-        if mem is not None:
-            metrics["memory_utilization"] = mem
+        cpu_avg, cpu_peak = sampler.stop()
+        if cpu_avg is not None:
+            metrics["cpu_utilization"] = cpu_avg
+        if cpu_peak is not None:
+            metrics["cpu_utilization_peak"] = cpu_peak
+        mem_avg, mem_peak = sampler.memory_utilization()
+        if mem_avg is not None:
+            metrics["memory_utilization"] = mem_avg
+        if mem_peak is not None:
+            metrics["memory_utilization_peak"] = mem_peak
         return metrics, "success", None
 
     def _execute_single(self, sql: str) -> tuple[dict, str, Optional[str]]:
@@ -183,21 +201,26 @@ class IoTDBExecutor:
 
     # ------------------------------------------------------------------
     def execute(self, query: str, query_id: str, strategy: dict) -> ExecutionResult:
-        """执行查询（baseline 实测可选 + 策略执行），返回事实性结果。"""
-        sql = (strategy or {}).get("equivalent_sql")
-        if not sql or not isinstance(sql, str):
-            sql = query   # 执行级策略：SQL 不变，由引擎按其能力执行
+        """执行查询（baseline 实测可选 + 策略执行），返回事实性结果。
 
-        timestamp = int(time.time() * 1000)
+        执行串行化（B2 并行下 Session 非线程安全；执行本身仅 ~30ms，
+        锁开销可忽略——LLM 调用才是并行收益来源）。
+        """
+        with self._exec_lock:
+            sql = (strategy or {}).get("equivalent_sql")
+            if not sql or not isinstance(sql, str):
+                sql = query   # 执行级策略：SQL 不变，由引擎按其能力执行
 
-        baseline_metrics: Optional[dict] = None
-        if self.measure_baseline and query.strip():
-            b_metrics, b_status, _ = self._execute_single(query)
-            if b_status == "success":
-                baseline_metrics = b_metrics
-            # baseline 失败：不携带 baseline（监控 Agent 如实标记，不编造）
+            timestamp = int(time.time() * 1000)
 
-        metrics, status, reason = self._execute_single(sql)
+            baseline_metrics: Optional[dict] = None
+            if self.measure_baseline and query.strip():
+                b_metrics, b_status, _ = self._execute_single(query)
+                if b_status == "success":
+                    baseline_metrics = b_metrics
+                # baseline 失败：不携带 baseline（监控 Agent 如实标记，不编造）
+
+            metrics, status, reason = self._execute_single(sql)
         return ExecutionResult(
             execution_status=status,
             failure_reason=reason,

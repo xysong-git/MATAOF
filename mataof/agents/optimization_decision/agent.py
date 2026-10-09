@@ -97,10 +97,18 @@ class OptimizationDecisionAgent:
             ctx.database_state, ctx.system_state, ctx.reference_time,
         )
 
-        # ---- 各维度评估与选择 ----
+        # ---- 各维度评估与选择（含策略评价表先验，D1）----
+        evaluations = decision_input.get("strategy_evaluations")
+        prior_strength = float(decision_input.get("eval_prior_strength")
+                               or 0.10)
+        min_count = int(decision_input.get("eval_min_count") or 3)
         results: dict[str, DimensionResult] = {}
         for dim in DIMENSIONS:
-            results[dim] = evaluate_dimension(dim, ctx, ev, llm_preferences)
+            results[dim] = evaluate_dimension(
+                dim, ctx, ev, llm_preferences,
+                evaluations=evaluations if isinstance(evaluations, dict) else None,
+                eval_prior_strength=prior_strength, eval_min_count=min_count,
+            )
 
         # ---- 维度置信度 ----
         dim_conf = {dim: dimension_confidence(results[dim], ctx, ev) for dim in DIMENSIONS}
