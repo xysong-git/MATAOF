@@ -71,18 +71,63 @@ def _cmd_run(args) -> int:
         return 2
 
     t_batch = time.time()
-    traces = [runner.run_query(q) for q in pos_queries]
-    for f in files:
-        traces.extend(runner.run_file(
+    traces: list = []
+    # tqdm 进度条：实时显示每条查询完成（stderr；非 TTY 或 --json 自动禁用）
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        tqdm = None
+    use_bar = (tqdm is not None) and (not args.json) and sys.stderr.isatty()
+
+    from mataof.report import batch_summary, format_batch_summary
+
+    if pos_queries:
+        bar = tqdm(total=len(pos_queries), desc="位置参数查询", unit="条",
+                   file=sys.stderr) if use_bar else None
+        t0 = time.time()
+        for q in pos_queries:
+            traces.append(runner.run_query(q))
+            if bar is not None:
+                bar.update(1)
+        if bar is not None:
+            bar.close()
+        pos_time = round(time.time() - t0, 2)
+        runner.append_batch_row(pos_time, len(pos_queries), source="位置参数")
+
+    total_files = len(files)
+    for idx, f in enumerate(files, 1):
+        desc = f"[{idx}/{total_files}] {os.path.basename(f)}"
+        bar = tqdm(unit="条", desc=desc, file=sys.stderr) if use_bar else None
+        t0 = time.time()
+        file_traces = runner.run_file(
             f,
             per_file_limit=getattr(args, "per_file_limit", None),
             sample_mode=getattr(args, "sample", None),
             sample_seed=getattr(args, "seed", None),
             workers=getattr(args, "workers", 1),
-        ))
+            progress_fn=(lambda: bar.update(1)) if bar is not None else None,
+            # 多文件连续运行：不逐文件排空异步增强（推迟到全部文件后统一排空）
+            drain_llm=False,
+        )
+        if bar is not None:
+            bar.close()
+        file_time = round(time.time() - t0, 2)
+        traces.extend(file_traces)
+        # 每文件 = 一个批次：立即打印该批次汇总 + 追加 batch 行（最终汇总按批次求和）
+        runner.append_batch_row(file_time, len(file_traces), source=os.path.basename(f))
+        if not args.json:
+            print()
+            print(format_batch_summary(
+                batch_summary(file_traces, total_time_s=file_time),
+                title=f"批次：{os.path.basename(f)} [{idx}/{total_files}]"))
     total_time_s = round(time.time() - t_batch, 2)
-    runner.wait_llm_tasks()   # B4：排空异步增强，保证 --json 输出含完整 llm_analysis
-    runner.append_batch_row(total_time_s, len(traces))   # 批次行（最终汇总用）
+    # B4：按配置排空异步增强（默认 0 秒不等待——主流程不被 LLM 补写阻塞）
+    pending = runner.wait_llm_tasks(timeout_s=runner.config.async_drain_timeout)
+    if pending:
+        print(f"[runner] 异步 LLM 增强：{pending} 个补写任务未完成（未等待；"
+              f"对应查询的 llm_analysis 保持未完成语义，确定性产物不受影响。"
+              f"如需完整补写，配置 async_drain_timeout 为等待秒数）", file=sys.stderr)
+    # batch 行已按文件/位置参数分组追加（不再重复追加整轮行）
     for trace in traces:
         mon = trace["monitoring"]
         # --json 模式：摘要走 stderr，stdout 只输出纯 JSON（机器可读）
@@ -102,7 +147,7 @@ def _cmd_run(args) -> int:
         print(json.dumps({"traces": traces, "batch_summary": summary}, ensure_ascii=False))
     else:
         print()
-        print(format_batch_summary(summary))
+        print(format_batch_summary(summary, title="执行汇总（本轮总体）"))
     return 0
 
 

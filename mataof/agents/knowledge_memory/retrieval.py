@@ -108,13 +108,8 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
 
     matched: list[dict] = []
     for record in store.all():
-        # KM 记录结构（query_record/context/...）→ 相似度模块所需视图
-        view = {
-            "query_features": (record.get("query_record") or {}).get("query_features") or {},
-            "database_state": (record.get("context") or {}).get("database_state") or {},
-            "system_state": (record.get("context") or {}).get("system_state") or {},
-        }
-        sims = component_similarities(current_compact, current_db, current_sys, view)
+        # 直接传原始记录：相似度模块兼容 KM 布局（免重建 view，大库扫描更快）
+        sims = component_similarities(current_compact, current_db, current_sys, record)
         level = match_level(sims["overall"])
         if level is None:
             continue
@@ -152,35 +147,69 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
             },
         })
 
-    # ---- 汇总：成功/失败模式与策略统计 ----
+    # ---- 汇总：成功/失败模式与策略统计（单遍遍历，O(N)，大库友好）----
+    from collections import Counter
     successful_strategies: list[dict] = []
     failed_strategies: list[dict] = []
     strategy_statistics: dict[str, dict] = {}
+    n_strong = n_moderate = n_weak = 0
 
-    strategy_ids = sorted({(m["record"].get("strategy") or {}).get("strategy_id") or "unknown"
-                           for m in matched})
-    for sid in strategy_ids:
-        recs = _strategy_records(matched, sid)
-        total = len(recs)
-        success = sum(1 for r in recs if r.get("execution_result") == "improved")
-        failure = sum(1 for r in recs if _is_failure(r))
-        ratio = round(success / total, 4) if total else 0.0
-        lats = [lat for lat in (_latency_of(r) for r in recs) if lat is not None]
+    # 每策略聚合：total/success/failure/lats/qtype/levels/db_keys/ftypes
+    agg: dict[str, dict] = {}
+    for m in matched:
+        if m["level"] == "strong_match":
+            n_strong += 1
+        elif m["level"] == "moderate_match":
+            n_moderate += 1
+        else:
+            n_weak += 1
+        rec = m["record"]
+        sid = (rec.get("strategy") or {}).get("strategy_id") or "unknown"
+        a = agg.setdefault(sid, {
+            "total": 0, "success": 0, "failure": 0, "lats": [],
+            "qtypes": Counter(), "levels": Counter(), "db_keys": set(),
+            "ftypes": Counter(),
+        })
+        a["total"] += 1
+        if rec.get("execution_result") == "improved":
+            a["success"] += 1
+        if _is_failure(rec):
+            a["failure"] += 1
+            if (rec.get("execution") or {}).get("status") in ("failed", "timeout"):
+                a["ftypes"]["execution_failed"] += 1
+            if rec.get("execution_result") == "degraded":
+                a["ftypes"]["degraded"] += 1
+            for an in rec.get("anomalies") or []:
+                if an.get("severity") == "critical":
+                    a["ftypes"][an.get("type") or "anomaly"] += 1
+        lat = _latency_of(rec)
+        if lat is not None:
+            a["lats"].append(lat)
+        qf = (rec.get("query_record") or {}).get("query_features") or {}
+        a["qtypes"][qf.get("query_type") or "unknown"] += 1
+        a["levels"][(qf.get("time") or {}).get("range_level") or "unknown"] += 1
+        a["db_keys"].update((rec.get("context") or {}).get("database_state") or {})
 
+    for sid in sorted(agg):
+        a = agg[sid]
+        total = a["total"]
+        ratio = round(a["success"] / total, 4) if total else 0.0
+        lats = a["lats"]
         strategy_statistics[sid] = {
             "total": total,
-            "success": success,
-            "failure": failure,
+            "success": a["success"],
+            "failure": a["failure"],
             "success_ratio": ratio,
             "avg_latency_ms": round(sum(lats) / len(lats), 2) if lats else None,
         }
-
-        # 成功模式：累计次数与成功率达到阈值
         if total >= MIN_PATTERN_COUNT and ratio >= MIN_SUCCESS_RATIO:
+            qs = a["qtypes"].most_common(1)[0][0] if a["qtypes"] else "unknown"
+            ls = a["levels"].most_common(1)[0][0] if a["levels"] else "unknown"
             successful_strategies.append({
                 "strategy_id": sid,
-                "query_condition_summary": _query_condition_summary(recs),
-                "database_state_summary": _database_state_summary(recs),
+                "query_condition_summary": f"{qs} · 时间范围 {ls}",
+                "database_state_summary": "、".join(sorted(a["db_keys"]))
+                                          if a["db_keys"] else "（无数据库状态记录）",
                 "performance": {
                     "avg_latency_ms": round(sum(lats) / len(lats), 2) if lats else None,
                     "min_latency_ms": min(lats) if lats else None,
@@ -189,34 +218,20 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
                 "count": total,
                 "success_ratio": ratio,
             })
-
-        # 失败经验：保留并汇总
-        if failure > 0:
-            from collections import Counter
-            ftypes = Counter()
-            for r in recs:
-                if r.get("execution", {}).get("status") in ("failed", "timeout"):
-                    ftypes["execution_failed"] += 1
-                if r.get("execution_result") == "degraded":
-                    ftypes["degraded"] += 1
-                for a in r.get("anomalies") or []:
-                    if a.get("severity") == "critical":
-                        ftypes[a.get("type") or "anomaly"] += 1
+        if a["failure"] > 0:
             failed_strategies.append({
                 "strategy_id": sid,
-                "count": failure,
-                "failure_ratio": round(failure / total, 4) if total else 0.0,
-                "failure_types": dict(ftypes),
+                "count": a["failure"],
+                "failure_ratio": round(a["failure"] / total, 4) if total else 0.0,
+                "failure_types": dict(a["ftypes"]),
             })
 
     # ---- 知识置信度：强/中/弱匹配加权，封顶 1.0 ----
-    n_strong = sum(1 for m in matched if m["level"] == "strong_match")
-    n_moderate = sum(1 for m in matched if m["level"] == "moderate_match")
-    n_weak = sum(1 for m in matched if m["level"] == "weak_match")
     knowledge_confidence = round(min(1.0, 0.25 * n_strong + 0.15 * n_moderate + 0.05 * n_weak), 2)
 
     # ---- 决策 Agent 兼容记录（扩展：可直接作为 historical_records 输入）----
-    # 同样按 top-K 截断（决策证据规模有界）；summary 统计不受影响
+    # 同样按 top-K 截断（决策证据规模有界）；summary 统计不受影响。
+    # 每条携带 similarity（H1：决策端直接复用，不再重算相似度）。
     records_for_decision: list[dict] = []
     for m in listed:
         rec = m["record"]
@@ -224,6 +239,7 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
         records_for_decision.append({
             "record_id": rec["record_id"],
             "record_time": rec.get("timestamp"),
+            "similarity": m["overall"],          # 预计算相似度（决策端跳过重算）
             "query_features": (rec.get("query_record") or {}).get("query_features") or {},
             "database_state": (rec.get("context") or {}).get("database_state") or {},
             "system_state": (rec.get("context") or {}).get("system_state") or {},

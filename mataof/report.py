@@ -26,8 +26,11 @@ def percentile_nearest_rank(sorted_values: list, p: float) -> Optional[float]:
     return sorted_values[idx]
 
 
-def _latency_stats(samples: list) -> dict:
-    """对一组延迟样本（毫秒）做统计。样本 <2 时百分位为 null（不编造）。"""
+def latency_stats(samples: list) -> dict:
+    """对一组延迟样本（毫秒）做统计。样本 <2 时百分位为 null（不编造）。
+
+    公共统计函数（H2）：CLI 批次汇总与 scripts/aggregate_agent.py 共用。
+    """
     if not samples:
         return {"samples": 0, "avg_ms": None, "min_ms": None, "max_ms": None,
                 "p50_ms": None, "p95_ms": None, "p99_ms": None}
@@ -41,6 +44,22 @@ def _latency_stats(samples: list) -> dict:
         "p95_ms": percentile_nearest_rank(s, 95) if len(s) >= 2 else None,
         "p99_ms": percentile_nearest_rank(s, 99) if len(s) >= 2 else None,
     }
+
+
+def resource_stats(samples: list) -> dict:
+    """对一组资源利用率样本（0~1）做统计（avg/max）。
+
+    公共统计函数（H2）：CLI 批次汇总与 scripts/aggregate_agent.py 共用。
+    """
+    if not samples:
+        return {"samples": 0, "avg": None, "max": None}
+    return {"samples": len(samples),
+            "avg": round(sum(samples) / len(samples), 4),
+            "max": round(max(samples), 4)}
+
+
+# 兼容别名（历史引用）
+_latency_stats = latency_stats
 
 
 def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
@@ -101,13 +120,6 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
             total_time_s = (max(stamps) - min(stamps)) / 1000.0
 
     success = status_counts.get("success", 0)
-    def _res_stats(samples: list) -> dict:
-        if not samples:
-            return {"samples": 0, "avg": None, "max": None}
-        return {"samples": len(samples),
-                "avg": round(sum(samples) / len(samples), 4),
-                "max": round(max(samples), 4)}
-
     return {
         "total_queries": total,
         "total_time_s": round(total_time_s, 2) if total_time_s is not None else None,
@@ -123,19 +135,19 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
         "latency_ms": _latency_stats(latency_samples),
         "baseline_latency_ms": _latency_stats(baseline_samples),
         "resource_utilization": {   # 开题报告 3.5：平均与峰值口径
-            "cpu": _res_stats(cpu_samples),
-            "cpu_peak": _res_stats(cpu_peak_samples),
-            "memory": _res_stats(mem_samples),
-            "memory_peak": _res_stats(mem_peak_samples),
+            "cpu": resource_stats(cpu_samples),
+            "cpu_peak": resource_stats(cpu_peak_samples),
+            "memory": resource_stats(mem_samples),
+            "memory_peak": resource_stats(mem_peak_samples),
         },
         "assessment_distribution": assessments,
     }
 
 
-def format_batch_summary(s: dict) -> str:
-    """人类可读的汇总文本（终端打印用）。"""
+def format_batch_summary(s: dict, title: str = "执行汇总（本批次）") -> str:
+    """人类可读的汇总文本（终端打印用）。title 可自定义（如按文件命名批次）。"""
     ex = s["execution"]
-    lines = ["== 执行汇总（本批次）=="]
+    lines = [f"== {title} =="]
     lines.append(
         f"查询数: {s['total_queries']} | 总用时: {s['total_time_s']}s | "
         f"吞吐: {s['throughput_qps']} 查询/秒"

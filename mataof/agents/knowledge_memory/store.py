@@ -35,9 +35,11 @@ class MemoryStore:
         self.save_interval = max(1, int(save_interval))
         self._records: dict[str, dict] = {}
         self._evaluations: dict[str, dict] = {}
+        self._strategy_stats: dict[str, dict] = {}   # 增量统计（strategy_id 粒度）
         self._next_seq = 1
         self._pending_saves = 0
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()   # 串行化文件写（tmp 路径并发写保护）
         if path and os.path.exists(path):
             self._load()
 
@@ -52,59 +54,101 @@ class MemoryStore:
                 evals = data.get("evaluations")
                 if isinstance(evals, dict):
                     self._evaluations = evals
-            # 回填：旧版本存储文件没有评价表 → 从存量记录派生重建（派生数据，可重算）
-            if self._records and not self._evaluations:
-                self._backfill_evaluations()
+                stats = data.get("strategy_stats")
+                if isinstance(stats, dict):
+                    self._strategy_stats = stats
+            # 回填：旧版本存储文件没有派生表 → 从存量记录重建（派生数据，可重算）
+            if self._records and (not self._evaluations or not self._strategy_stats):
+                self._backfill_derived()
         except (json.JSONDecodeError, OSError, TypeError, ValueError):
             # 损坏的存储文件 → 从空库开始（不覆盖原文件，直到下一次保存）
             self._records = {}
             self._evaluations = {}
+            self._strategy_stats = {}
             self._next_seq = 1
 
-    def _backfill_evaluations(self) -> None:
-        """从全部存量记录重建评价表（内存聚合 + 一次持久化）。"""
+    def _backfill_derived(self) -> None:
+        """从全部存量记录重建评价表与增量统计（内存聚合 + 一次持久化）。"""
         for rec in self._records.values():
             self._record_evaluation_inplace(rec)
+            self._record_strategy_stats_inplace(rec)
         self._save()
 
-    def _save(self) -> None:
-        if not self.path:
-            return
-        payload = {
+    def _snapshot_payload(self) -> dict:
+        """在锁内构建落盘快照：records 浅拷贝（记录不可变，安全），
+        派生表深拷贝（条目数量小）。"""
+        import copy as _copy
+        return {
             "version": 1,
             "next_seq": self._next_seq,
-            "records": self._records,
-            "evaluations": self._evaluations,   # 派生聚合，随入库同步持久化
+            "records": dict(self._records),
+            "evaluations": _copy.deepcopy(self._evaluations),
+            "strategy_stats": _copy.deepcopy(self._strategy_stats),
         }
-        tmp_path = self.path + ".tmp"
+
+    def _write_payload(self, payload: dict) -> None:
+        """数据锁外 dump + 原子写（B5）。
+
+        tmp 文件名唯一（pid+线程），多线程/多实例并发写互不干扰；
+        原子 replace 保证任何时刻文件完整。
+        """
+        tmp_path = f"{self.path}.tmp.{os.getpid()}.{threading.get_ident()}"
         with open(tmp_path, "w", encoding="utf-8") as f:
             # 紧凑序列化（无缩进）：大库落盘开销显著降低（B5）
             json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
         os.replace(tmp_path, self.path)
+
+    def _save(self) -> None:
+        if not self.path:
+            return
+        payload = self._snapshot_payload()
+        self._write_payload(payload)
         self._pending_saves = 0
 
-    def _maybe_save(self) -> None:
-        """按 save_interval 批量落盘（B5）：未达阈值仅累积，flush() 强制写入。"""
+    def _maybe_save_locked(self) -> Optional[dict]:
+        """锁内调用：按 save_interval 决定是否产出落盘快照（dump/写盘在锁外）。
+
+        仅内存模式（path=None）不落盘，返回 None。
+        """
+        if not self.path:
+            return None
         self._pending_saves += 1
         if self._pending_saves >= self.save_interval:
-            self._save()
+            payload = self._snapshot_payload()
+            self._pending_saves = 0
+            return payload
+        return None
 
     def flush(self) -> None:
         """强制落盘（批次结束/进程退出前调用，避免批量模式丢失尾部更新）。"""
+        if not self.path:
+            return
+        payload = None
         with self._lock:
             if self._pending_saves > 0:
-                self._save()
+                payload = self._snapshot_payload()
+                self._pending_saves = 0
+        if payload is not None:
+            self._write_payload(payload)
 
     # ---- 追加（唯一写操作）----
     def add(self, record: dict) -> str:
-        """追加一条记录，返回分配的 record_id。不修改任何已有记录。"""
+        """追加一条记录，返回分配的 record_id。不修改任何已有记录。
+
+        落盘采用"锁内快照 + 锁外 dump/写盘"：大库时避免长时间持锁
+        阻塞其他 worker（快照依赖记录不可变性与派生表深拷贝）。
+        """
+        payload = None
         with self._lock:
             record_id = f"rec{self._next_seq:08d}"
             self._next_seq += 1
             stored = dict(record)
             stored["record_id"] = record_id
             self._records[record_id] = stored
-            self._maybe_save()
+            self._record_strategy_stats_inplace(stored)   # 增量统计（O(1) 查询）
+            payload = self._maybe_save_locked()
+        if payload is not None:
+            self._write_payload(payload)
         return record_id
 
     # ---- 策略评价表（派生聚合，可重写；原始记录不可变）----
@@ -114,10 +158,13 @@ class MemoryStore:
 
     def record_evaluation(self, record: dict) -> dict:
         """把一条已入库记录聚合进评价表，返回本次更新的条目（键→条目）。"""
+        payload = None
         with self._lock:
             updated = self._record_evaluation_inplace(record)
             if updated:
-                self._maybe_save()
+                payload = self._maybe_save_locked()
+        if payload is not None:
+            self._write_payload(payload)
         return updated
 
     def _record_evaluation_inplace(self, record: dict) -> dict:
@@ -178,32 +225,34 @@ class MemoryStore:
         with self._lock:
             return len(self._records)
 
+    def _record_strategy_stats_inplace(self, record: dict) -> None:
+        """内存内增量更新 strategy_id 粒度统计（statistics 的 O(1) 来源）。"""
+        sid = (record.get("strategy") or {}).get("strategy_id") or "unknown"
+        e = self._strategy_stats.setdefault(
+            sid, {"total": 0, "success": 0, "failure": 0, "latencies": []})
+        e["total"] += 1
+        effect = record.get("execution_result") or ""
+        if effect == "improved":
+            e["success"] += 1
+        elif effect in ("degraded", "failed"):
+            e["failure"] += 1
+        lat = ((record.get("execution") or {}).get("metrics") or {}).get("response_time_ms")
+        if isinstance(lat, (int, float)) and not isinstance(lat, bool):
+            e["latencies"].append(float(lat))
+            if len(e["latencies"]) > 1000:      # 只保留最近样本（内存有界）
+                e["latencies"] = e["latencies"][-1000:]
+
     def statistics(self) -> dict:
-        """全库累计统计（按 strategy_id 聚合的成功/失败与平均延迟）。"""
-        stats: dict[str, dict] = {}
+        """全库累计统计（按 strategy_id 聚合；增量维护，O(策略数) 而非 O(记录数)）。"""
         with self._lock:
-            records = list(self._records.values())
-        for rec in records:
-            sid = (rec.get("strategy") or {}).get("strategy_id") or "unknown"
-            entry = stats.setdefault(sid, {"total": 0, "success": 0, "failure": 0,
-                                           "latencies": []})
-            entry["total"] += 1
-            effect = rec.get("execution_result") or ""
-            if effect == "improved":
-                entry["success"] += 1
-            elif effect in ("degraded", "failed"):
-                entry["failure"] += 1
-            lat = ((rec.get("execution") or {}).get("metrics") or {}).get("response_time_ms")
-            if isinstance(lat, (int, float)) and not isinstance(lat, bool):
-                entry["latencies"].append(float(lat))
-        out = {}
-        for sid, e in stats.items():
-            lats = e["latencies"]
-            out[sid] = {
-                "total": e["total"],
-                "success": e["success"],
-                "failure": e["failure"],
-                "success_ratio": round(e["success"] / e["total"], 4) if e["total"] else 0.0,
-                "avg_latency_ms": round(sum(lats) / len(lats), 2) if lats else None,
-            }
+            out = {}
+            for sid, e in self._strategy_stats.items():
+                lats = e["latencies"]
+                out[sid] = {
+                    "total": e["total"],
+                    "success": e["success"],
+                    "failure": e["failure"],
+                    "success_ratio": round(e["success"] / e["total"], 4) if e["total"] else 0.0,
+                    "avg_latency_ms": round(sum(lats) / len(lats), 2) if lats else None,
+                }
         return out

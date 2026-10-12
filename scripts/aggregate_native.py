@@ -11,17 +11,16 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 
+# 路径引导 + 公共统计复用（H2）
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from mataof.report import percentile_nearest_rank as percentile  # noqa: E402
+
 COST_RE = re.compile(r"It costs ([\d.]+)s")
-
-
-def percentile(sorted_values: list, p: float):
-    if not sorted_values:
-        return None
-    idx = max(0, int(p / 100 * len(sorted_values) + 0.999999) - 1)
-    return sorted_values[idx]
 
 
 def parse(files: list) -> dict:

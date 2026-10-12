@@ -18,6 +18,8 @@
   "baseline_strategy": null,
   "thresholds": {},
   "reference_time": null,
+  "knowledge_save_interval": 20,
+  "async_drain_timeout": 0,
   "llm": {
     "provider": "openai",
     "base_url": "http://127.0.0.1:8000/v1",
@@ -36,6 +38,5 @@
     "async_enhance": true,
     "async_workers": 2,
     "cache_file": "data/llm_cache_dbs.json"
-  },
-  "knowledge_save_interval": 20
+  }
 }

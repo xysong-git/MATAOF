@@ -41,14 +41,14 @@ mataof run --config config.dbs.json \
 bash scripts/run_experiment.sh --mode native --per-file-limit 100 --sample random --seed 42
 
 # 模式二：固定策略对照（Baseline 2：跳过决策 Agent，固定策略组合执行）
-bash scripts/run_experiment.sh --mode fixed --per-file-limit 100 --sample random --seed 42 --workers 4
+bash scripts/run_experiment.sh --mode fixed --per-file-limit 100 --sample random --seed 42
 
 # 模式三：Agent 确定性链路（Ours，无 LLM）
-bash scripts/run_experiment.sh --mode agent --per-file-limit 100 --sample random --seed 42 --workers 4
+bash scripts/run_experiment.sh --mode agent --per-file-limit 100 --sample random --seed 42
 
 # 模式四：Agent + 本地 vLLM 推理（Ours + LLM 增强；异步补写 + 输出缓存默认开启）
 # 需要 vLLM 已启动；未启动会预检失败（不会静默退化成 agent 模式）
-bash scripts/run_experiment.sh --mode llm --per-file-limit 100 --sample random --seed 42 --workers 4
+bash scripts/run_experiment.sh --mode llm --per-file-limit 100 --sample random --seed 42
 ```
 
 三组对照（对应开题报告 3.4.1）：native = Baseline 1，fixed = Baseline 2，
@@ -61,7 +61,19 @@ full_scan / time_first / final_level_aggregation），跳过决策 Agent 与历�
 `--scales`，规模从目录名推导用于选配置）、`--scales dbs,dbm,dbl`（规模）、
 `--files q1,q4`（只跑指定文件，默认全部 q*.sql）、`--per-file-limit N`、
 `--sample seq|random`、`--seed N`、`--workers N`（查询级并行，agent/llm/fixed
-模式生效；LLM 模式建议 4）。
+模式生效）。
+
+**workers 选型（实测结论）**：
+- 默认异步 LLM 模式与 agent/fixed 模式：主链路为 CPU 密集，workers>1 反而更慢
+  （GIL 串行化：29k 库实测 workers=1 约 896ms/条 vs workers=4 约 2215ms/条）；
+  异步模式下系统会**自动降级为 1 并提示**，保持默认即可；
+- 同步 LLM 模式（`async_enhance: false`，需逐条 LLM 参与决策的实验）：
+  workers=4 实测提速 1.75×（重叠 LLM 网络等待），此时并行才有效。
+
+**知识库规模与每轮实验**：知识库 append-only 累积，检索成本随库大小线性增长
+（29k 条库单条检索约 400~600ms）。同质查询集下证据很快饱和——**正式实验建议
+每轮使用独立知识库路径**（改配置 `knowledge_store`，或每轮后归档），保持库规模
+可控；需要跨轮累积时再共享同一路径。
 
 **CLI 的 --file 支持多文件与通配符**：`mataof run --file query/queries_dbs/q*.sql ...`
 （shell 展开为多文件，全部按 --file 处理，每文件分别采样）；若位置参数是文件路径
@@ -94,19 +106,19 @@ LLM 模式说明（B4/B3 已默认启用）：
 **方式 A：逐文件执行（推荐，进度可见、失败不中断）**
 
 ```bash
-# 小规模（root.dbs.g_0）：11 个文件，4 并发
+# 小规模（root.dbs.g_0）：11 个文件（worker 保持默认 1，见 §1.1 选型说明）
 for f in query/queries_dbs/q*.sql; do
-  mataof run --file "$f" --config config.dbs.json --workers 4
+  mataof run --file "$f" --config config.dbs.json
 done
 
 # 中规模（root.dbm.g_0）
 for f in query/queries_dbm/q*.sql; do
-  mataof run --file "$f" --config config.dbm.json --workers 4
+  mataof run --file "$f" --config config.dbm.json
 done
 
 # 大规模（root.dbl.g_0）
 for f in query/queries_dbl/q*.sql; do
-  mataof run --file "$f" --config config.dbl.json --workers 4
+  mataof run --file "$f" --config config.dbl.json
 done
 ```
 
@@ -127,8 +139,8 @@ done
 ```
 
 参数说明：
-- `--workers N`：**查询级并行**（B2，默认 1 串行；LLM 模式下与 vLLM 连续批处理
-  配合可获 3~4× 吞吐，结果按输入顺序输出；`mataof run` 同样支持）；
+- `--workers N`：**查询级并行**（B2，默认 1；仅同步 LLM 模式有效，
+  实测 1.75× 提速；异步/无 LLM 模式系统自动降级为 1，见 §1.1 选型说明）；
 - `--per-file-limit N`：**每个 SQL 文件**最多取 N 条（默认全量 2000）；
 - `--sample seq|random`：顺序取前 N 条 / 随机抽样（抽样保持文件内原有顺序，种子可复现；同一 `--seed` 两次运行取到完全相同的语句）；
 - `--seed N`：随机抽样种子（默认 42）；
@@ -143,7 +155,7 @@ done
 **方式 C：后台整轮运行（统一脚本，见 §2.1 耗时）**
 
 ```bash
-nohup bash scripts/run_experiment.sh --mode agent --workers 4 \
+nohup bash scripts/run_experiment.sh --mode agent \
   > /tmp/mataof_round.log 2>&1 &
 ```
 

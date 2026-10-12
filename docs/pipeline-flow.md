@@ -219,9 +219,9 @@ improved / unchanged / degraded；执行失败 → failed；无数据 → insuff
 ```bash
 # 四模式切换（对应开题报告 3.4.1 三组对照 + LLM 变体）
 bash scripts/run_experiment.sh --mode native --per-file-limit 100 --sample random --seed 42
-bash scripts/run_experiment.sh --mode fixed  --per-file-limit 100 --sample random --seed 42 --workers 4
-bash scripts/run_experiment.sh --mode agent  --per-file-limit 100 --sample random --seed 42 --workers 4
-bash scripts/run_experiment.sh --mode llm    --per-file-limit 100 --sample random --seed 42 --workers 4
+bash scripts/run_experiment.sh --mode fixed  --per-file-limit 100 --sample random --seed 42
+bash scripts/run_experiment.sh --mode agent  --per-file-limit 100 --sample random --seed 42
+bash scripts/run_experiment.sh --mode llm    --per-file-limit 100 --sample random --seed 42
 # 公共参数：--query-dir / --scales / --files / --per-file-limit / --sample / --seed / --workers
 ```
 llm 模式默认异步增强（主链路与 agent 同速，LLM 解读后台补写）+ 输出缓存

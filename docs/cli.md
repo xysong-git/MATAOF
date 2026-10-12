@@ -13,7 +13,7 @@ pip install -e .            # 安装后提供 mataof 命令；不安装也可用
 mataof run "SELECT ..."                    # 运行一条查询（四 Agent 闭环）
 mataof run --file queries.sql              # 批量运行（.sql 按分号拆分；.jsonl 每行 {query_id, query}）
 mataof run --file query/queries_dbs/q*.sql # 通配符展开为多文件，每文件分别取样
-mataof run --file queries.sql --workers 4  # 查询级并行（B2；LLM 模式建议 4）
+mataof run --file queries.sql --workers 4  # 查询级并行（仅同步 LLM 模式有效；异步模式自动降级）
 mataof retrieve "SELECT ..."               # 仅检索历史知识（不执行、不入库）
 mataof stats                               # 知识库累计统计
 ```

@@ -158,16 +158,40 @@ def compact_features(analysis: dict) -> dict:
     }
 
 
+def _record_parts(record: dict) -> tuple:
+    """兼容两种记录布局，直接读取嵌套字典（免重建 view，降低大库扫描开销）。
+
+    决策契约布局（顶层 query_features/database_state/system_state）与
+    KM 记录布局（query_record/context 嵌套）都支持。
+    """
+    qf = record.get("query_features")
+    db = record.get("database_state")
+    sy = record.get("system_state")
+    if qf is None:
+        qr = record.get("query_record")
+        if isinstance(qr, dict):
+            qf = qr.get("query_features")
+    if db is None:
+        ctx = record.get("context")
+        if isinstance(ctx, dict):
+            db = ctx.get("database_state")
+    if sy is None:
+        ctx = record.get("context")
+        if isinstance(ctx, dict):
+            sy = ctx.get("system_state")
+    return qf or {}, db or {}, sy or {}
+
+
 def component_similarities(current_compact: dict, current_db: dict, current_sys: dict,
                            record: dict) -> dict:
     """计算单条历史记录与当前上下文的分量相似度与综合相似度。
 
     返回 {"query": 0~1, "database": 0~1, "system": 0~1, "overall": 0~1}。
     """
-    record_qf = record.get("query_features") or {}
+    record_qf, record_db, record_sys = _record_parts(record)
     sim_q = _similarity_query(current_compact, record_qf)
-    sim_db = _similarity_db(current_db, record.get("database_state") or {})
-    sim_sys = _similarity_system(current_sys, record.get("system_state") or {})
+    sim_db = _similarity_db(current_db, record_db)
+    sim_sys = _similarity_system(current_sys, record_sys)
     overall = SIM_WEIGHT_QUERY * sim_q + SIM_WEIGHT_DB * sim_db + SIM_WEIGHT_SYSTEM * sim_sys
     return {
         "query": round(sim_q, 4),
@@ -256,13 +280,21 @@ class HistoryEvidence:
 
 def build_history_evidence(records: list, current_compact: dict, current_db: dict,
                            current_sys: dict, reference_time: Optional[int]) -> HistoryEvidence:
-    """汇总历史记录：相似度达标者参与决策，其余计入 below_threshold/invalid。"""
+    """汇总历史记录：相似度达标者参与决策，其余计入 below_threshold/invalid。
+
+    H1：记录若携带预计算 `similarity`（KM 检索输出），直接复用；
+    否则回退到现场计算（对无该字段的输入保持兼容）。
+    """
     ev = HistoryEvidence()
     for rec in records:
         if not _valid_record(rec):
             ev.invalid += 1
             continue
-        sim = record_similarity(current_compact, current_db, current_sys, rec)
+        pre = rec.get("similarity")
+        if isinstance(pre, (int, float)) and not isinstance(pre, bool) and 0.0 <= pre <= 1.0:
+            sim = float(pre)                       # 预计算值，跳过重算
+        else:
+            sim = record_similarity(current_compact, current_db, current_sys, rec)
         if sim < SIMILARITY_THRESHOLD:
             ev.below_threshold += 1
             continue

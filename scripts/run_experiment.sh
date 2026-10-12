@@ -97,34 +97,59 @@ fi
 ROUND_ID="round-$(date +%Y%m%d-%H%M%S)"
 
 start=$(date +%s)
+# 收集本轮文件列表（sort -V 版本排序：q1,q2,...,q10,q11，而非字典序 q1,q10,q11,q2）
+file_list=()
 for qdir in "${qdirs[@]}"; do
-  # 从目录名推导规模（queries_dbs → dbs），用于选择配置文件
-  scale=$(basename "$qdir" | sed -n 's/^queries_\(.*\)$/\1/p')
-  [[ -n "$scale" ]] || scale=${SCALES%%,*}
-  for f in "$qdir"/q*.sql; do
+  while IFS= read -r f; do
+    file_list+=("$f")
+  done < <(for f in "$qdir"/q*.sql; do
     name=$(basename "$f" .sql)
     if [[ -n "$FILES" ]] && [[ ",$FILES," != *",$name,"* ]]; then continue; fi
-    case "$MODE" in
-      native)
-        out="$ROOT/results_baseline/${scale}_${name}.out"
-        mkdir -p "$(dirname "$out")"
-        sample_lines "$f" "$PER_FILE_LIMIT" "$SAMPLE" "$SEED" \
-          | bash "$IOTDB_BIN/sbin/start-cli.sh" -h 127.0.0.1 -p 6667 -u root -pw root \
-            > "$out" 2>&1
-        echo "[native] 完成 $scale/$name → $out"
-        ;;
-      agent|llm|fixed)
-        cfg="config.$scale.json"
-        [[ "$MODE" == "llm" ]] && cfg="config.$scale.llm.json"
-        [[ "$MODE" == "fixed" ]] && cfg="config.$scale.fixed.json"
-        ( cd "$ROOT" && python3 -m mataof run --file "$f" --config "$cfg" \
-            ${PER_FILE_LIMIT:+--per-file-limit "$PER_FILE_LIMIT"} \
-            --sample "$SAMPLE" --seed "$SEED" --workers "$WORKERS" \
-            --run-id "$ROUND_ID" )
-        ;;
-    esac
-  done
+    echo "$f"
+  done | sort -V)
 done
+total_files=${#file_list[@]}
+
+if [[ "$MODE" == "native" ]]; then
+  # native：逐文件管道执行（保持原逻辑）
+  file_no=0
+  for f in "${file_list[@]}"; do
+    name=$(basename "$f" .sql)
+    scale=$(basename "$(dirname "$f")" | sed -n 's/^queries_\(.*\)$/\1/p')
+    [[ -n "$scale" ]] || scale=${SCALES%%,*}
+    file_no=$((file_no + 1))
+    echo "== 文件 [$file_no/$total_files] $scale/$name =="
+    out="$ROOT/results_baseline/${scale}_${name}.out"
+    mkdir -p "$(dirname "$out")"
+    sample_lines "$f" "$PER_FILE_LIMIT" "$SAMPLE" "$SEED" \
+      | bash "$IOTDB_BIN/sbin/start-cli.sh" -h 127.0.0.1 -p 6667 -u root -pw root \
+        > "$out" 2>&1
+    echo "[native] 完成 $scale/$name → $out"
+  done
+else
+  # agent/llm/fixed：每规模一次 mataof 调用（多文件并行处理；
+  # 异步增强不与逐文件排空互相阻塞，文件间连续执行）
+  for qdir in "${qdirs[@]}"; do
+    scale=$(basename "$qdir" | sed -n 's/^queries_\(.*\)$/\1/p')
+    [[ -n "$scale" ]] || scale=${SCALES%%,*}
+    cfg="config.$scale.json"
+    [[ "$MODE" == "llm" ]] && cfg="config.$scale.llm.json"
+    [[ "$MODE" == "fixed" ]] && cfg="config.$scale.fixed.json"
+    files_this_scale=()
+    while IFS= read -r f; do
+      files_this_scale+=("$f")
+    done < <(for f in "$qdir"/q*.sql; do
+      name=$(basename "$f" .sql)
+      if [[ -n "$FILES" ]] && [[ ",$FILES," != *",$name,"* ]]; then continue; fi
+      echo "$f"
+    done | sort -V)
+    echo "== 规模 $scale：${#files_this_scale[@]} 个文件（本轮共 $total_files 个文件）=="
+    ( cd "$ROOT" && python3 -m mataof run --config "$cfg" \
+        ${PER_FILE_LIMIT:+--per-file-limit "$PER_FILE_LIMIT"} \
+        --sample "$SAMPLE" --seed "$SEED" --workers "$WORKERS" \
+        --run-id "$ROUND_ID" --file "${files_this_scale[@]}" )
+  done
+fi
 
 echo "本轮墙钟总用时: $(( $(date +%s) - start ))s"
 

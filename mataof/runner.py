@@ -95,6 +95,7 @@ class RunnerConfig:
     eval_min_count: int = 3                     # D1：评价表先验所需最小样本数
     fixed_strategy: Optional[dict] = None       # D3：固定策略对照（非空 → 跳过决策 Agent）
     knowledge_save_interval: int = 1            # B5：知识库批量落盘间隔（大库实验建议 20~50）
+    async_drain_timeout: float = 0.0            # B4：异步补写排空超时（0=不等待；>0 最多等 N 秒）
 
 
 class PipelineRunner:
@@ -142,13 +143,20 @@ class PipelineRunner:
     def _llm_for_query(self) -> Optional[object]:
         """按采样率决定本条查询是否启用同步 LLM；未采样 → None（确定性快路径）。
 
-        B4 异步模式下同步路径永远不用 LLM（后台统一补写），采样逻辑被绕过。
+        B4 异步模式下同步路径永远不用 LLM（后台统一补写）；采样逻辑同样适用于
+        异步补写（只有被采样的查询才入队补写，控制后台队列规模）。
         """
         if self._llm_async:
             return None
         if self._llm_every <= 1:
             return self.llm
         return self.llm if (self._seq % self._llm_every) == 0 else None
+
+    def _llm_sampled(self, seq: int) -> bool:
+        """本条查询是否命中 LLM 采样（异步补写据此决定是否入队）。"""
+        if self._llm_every <= 1:
+            return True
+        return seq % self._llm_every == 0
 
     # ------------------------------------------------------------------
     # 单查询闭环
@@ -270,7 +278,8 @@ class PipelineRunner:
             with self._seq_lock:
                 self._trace_paths[query_id] = trace_path
         # B4：异步增强——同步链路已完成，LLM 解读交由后台补写（不阻塞主链路）
-        if self._llm_async:
+        # 采样控制同样生效：未被采样的查询不入队（llm_analysis 保持未采样语义）
+        if self._llm_async and self._llm_sampled(seq):
             self._enqueue_llm_backfill(trace, query, decision_input, monitoring_input)
         return trace
 
@@ -343,53 +352,98 @@ class PipelineRunner:
             pass
 
     def wait_llm_tasks(self, timeout_s: Optional[float] = None) -> int:
-        """等待全部异步增强任务完成（批次结束/需要完整 llm_analysis 时调用）。"""
+        """等待异步增强任务，返回**仍未完成**的任务数。
+
+        timeout_s=None → 等待全部完成；
+        timeout_s=0   → 不等待，立即返回未完成数（主流程不阻塞，B4 默认）；
+        timeout_s>0   → 最多等待该秒数，超时放弃剩余任务。
+        未完成的补写保持"未采样/未完成"语义，确定性产物不受影响。
+        """
         with self._llm_futures_lock:
             futures = list(self._llm_futures)
-        for fut in futures:
-            try:
-                fut.result(timeout=timeout_s)
-            except Exception:
-                pass
+        if timeout_s is None:
+            for fut in futures:
+                try:
+                    fut.result()
+                except Exception:
+                    pass
+        elif timeout_s > 0:
+            import time as _time
+            deadline = _time.monotonic() + timeout_s
+            for fut in futures:
+                remaining = deadline - _time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    fut.result(timeout=remaining)
+                except Exception:
+                    pass
+        # timeout_s == 0：跳过等待
         with self._llm_futures_lock:
             self._llm_futures = [f for f in self._llm_futures if not f.done()]
-        return len(futures)
+        return sum(1 for f in futures if not f.done())
 
     # ------------------------------------------------------------------
     # 批量运行
     # ------------------------------------------------------------------
     def run_statements(self, statements: list, source: str = "",
-                       sampling: Optional[dict] = None, workers: int = 1) -> list:
+                       sampling: Optional[dict] = None, workers: int = 1,
+                       progress_fn: Optional[Any] = None,
+                       drain_llm: bool = True) -> list:
         """运行一组语句；source 为来源文件/名称，sampling 为采样说明（写入追踪）。
 
         workers>1 时用线程池并行处理（B2）：各查询的 LLM 调用可并发（vLLM
         continuous batching），知识库/执行层已做线程安全处理；结果按输入顺序返回。
-        批次结束后 flush 知识库（批量落盘模式下保证数据持久化）。
+        progress_fn：每条查询完成后回调（无参，用于 tqdm 进度条；线程安全）。
+        drain_llm：结束后是否排空异步增强任务（多文件连续运行时传 False，
+        把排空推迟到全部文件之后，避免每文件阻塞等待）。
+
+        workers 语义（实测结论）：
+        - 同步 LLM 模式（async_enhance=false）：主链路含 LLM 网络等待（I/O），
+          多线程可重叠等待 → workers=4 实测提速 1.75×；
+        - 异步模式 / 无 LLM：主链路为 CPU 密集（GIL 串行化），workers>1
+          实测反而更慢（29k 库 896ms→2215ms/条）→ 自动降级为 1 并提示。
         """
         workers = max(1, int(workers))
+        if workers > 1 and self._llm_async:
+            print(f"[runner] 注意：异步 LLM 模式下主链路为 CPU 密集工作，"
+                  f"workers={workers} 无收益（GIL），已按 workers=1 执行；"
+                  f"需要并行请使用同步 LLM 模式（async_enhance=false）",
+                  flush=True)
+            workers = 1
         if workers == 1:
-            traces = [self.run_query(s, source=source, sampling=sampling)
-                      for s in statements]
+            traces = []
+            for s in statements:
+                traces.append(self.run_query(s, source=source, sampling=sampling))
+                if progress_fn is not None:
+                    progress_fn()
         else:
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                traces = list(pool.map(
-                    lambda s: self.run_query(s, source=source, sampling=sampling),
-                    statements,
-                ))
-        self.wait_llm_tasks()   # B4：批次结束排空异步增强任务
+                def _run(s):
+                    t = self.run_query(s, source=source, sampling=sampling)
+                    if progress_fn is not None:
+                        progress_fn()
+                    return t
+                traces = list(pool.map(_run, statements))   # map 保序
+        if drain_llm:
+            self.wait_llm_tasks()   # B4：批次结束排空异步增强任务
         self.km.store.flush()
         return traces
 
     def run_file(self, path: str, per_file_limit: Optional[int] = None,
                  sample_mode: Optional[str] = None,
                  sample_seed: Optional[int] = None,
-                 workers: int = 1) -> list:
+                 workers: int = 1,
+                 progress_fn: Optional[Any] = None,
+                 drain_llm: bool = True) -> list:
         """运行查询文件：.sql 按分号拆分语句；.jsonl 每行 {"query_id", "query"}。
 
         按配置（或参数覆盖）做每文件采样：per_file_limit 条、seq/random 模式、
         随机种子 sample_seed（同种子可复现）。采样说明写入每条追踪与汇总日志。
         workers：并行处理查询数（B2，默认 1 串行）。
+        progress_fn：每条查询完成回调（tqdm 进度条）。
+        drain_llm：结束后是否排空异步增强（多文件连续运行时传 False）。
         """
         source = os.path.basename(path)
         limit = per_file_limit if per_file_limit is not None else self.config.per_file_limit
@@ -412,14 +466,18 @@ class PipelineRunner:
                     str(item.get("query") or ""), str(item.get("query_id") or ""),
                     source=source, sampling=sampling,
                 ))
-            self.wait_llm_tasks()
+                if progress_fn is not None:
+                    progress_fn()
+            if drain_llm:
+                self.wait_llm_tasks()
             self.km.store.flush()
             return traces
         with open(path, encoding="utf-8") as f:
             text = f.read()
         statements, sampling = sample_items(split_sql_statements(text), limit, mode, rng, seed)
         return self.run_statements(statements, source=source, sampling=sampling,
-                                   workers=workers)
+                                   workers=workers, progress_fn=progress_fn,
+                                   drain_llm=drain_llm)
 
     # ------------------------------------------------------------------
     # D3：固定策略对照（Baseline 2，跳过决策 Agent）
@@ -535,11 +593,16 @@ class PipelineRunner:
             f.write(json.dumps(summary, ensure_ascii=False) + "\n")
         return path
 
-    def append_batch_row(self, total_time_s: float, total_queries: int) -> None:
-        """把本批次墙钟总用时以 batch 行追加进 run_log（最终汇总据此算总用时/吞吐）。"""
+    def append_batch_row(self, total_time_s: float, total_queries: int,
+                         source: str = "") -> None:
+        """把一批次的墙钟总用时以 batch 行追加进 run_log（最终汇总据此算总用时/吞吐）。
+
+        source：批次来源（文件名/位置参数等），供最终汇总区分各批次。
+        """
         if not self.config.results_dir:
             return
         row = {"batch": True, "run_id": self.run_id, "query_id": None,
+               "source": source,
                "batch_total_time_s": round(total_time_s, 2),
                "batch_queries": int(total_queries)}
         with open(os.path.join(self.config.results_dir, "run_log.jsonl"),
@@ -570,4 +633,6 @@ def load_config_file(path: str) -> RunnerConfig:
         eval_min_count=int(data.get("eval_min_count") or 3),
         fixed_strategy=data.get("fixed_strategy"),
         knowledge_save_interval=int(data.get("knowledge_save_interval") or 1),
+        async_drain_timeout=float(data.get("async_drain_timeout")
+                                  if data.get("async_drain_timeout") is not None else 0.0),
     )
