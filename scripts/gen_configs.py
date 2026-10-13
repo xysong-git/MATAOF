@@ -66,7 +66,7 @@ def base_config(scale: str, mode: str) -> dict:
         "baseline_strategy": None,
         "thresholds": {},
         "reference_time": None,
-        "knowledge_save_interval": 20,
+        "knowledge_save_interval": 500,
         "async_drain_timeout": 0,
     }
     if mode == "llm":
