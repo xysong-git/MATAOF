@@ -18,10 +18,11 @@
   "baseline_strategy": null,
   "thresholds": {},
   "reference_time": null,
+  "knowledge_save_interval": 500,
+  "async_drain_timeout": 0,
   "fixed_strategy": {
     "time_pruning": "full_scan",
     "filter_order": "time_first",
     "aggregation_placement": "final_level_aggregation"
-  },
-  "knowledge_save_interval": 20
+  }
 }

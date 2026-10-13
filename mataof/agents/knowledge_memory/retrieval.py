@@ -107,15 +107,43 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
     current_sys = system_state if isinstance(system_state, dict) else {}
 
     matched: list[dict] = []
-    for record in store.all():
-        # 直接传原始记录：相似度模块兼容 KM 布局（免重建 view，大库扫描更快）
-        sims = component_similarities(current_compact, current_db, current_sys, record)
-        level = match_level(sims["overall"])
-        if level is None:
-            continue
-        matched.append({"record": record, "level": level, **sims})
+    vectorized = False
+    try:
+        import numpy  # noqa: F401
+        from mataof.similarity import build_vector_matrix, vectorized_similarities
+        mat = build_vector_matrix(store)
+        if mat is not None:
+            # 向量化路径（路线 2）：矩阵运算替代逐条 Python 循环，语义与逐条完全一致
+            q_s, db_s, sy_s, overall = vectorized_similarities(
+                current_compact, current_db, current_sys, mat)
+            order = numpy.argsort(-overall, kind="stable")   # 降序；stable 保持记录顺序
+            for idx in order:
+                ov = float(overall[idx])
+                level = match_level(ov)
+                if level is None:
+                    break   # 降序：后续都低于阈值
+                matched.append({
+                    "record": mat["records"][idx],
+                    "level": level,
+                    "query": round(float(q_s[idx]), 4),
+                    "database": round(float(db_s[idx]), 4),
+                    "system": round(float(sy_s[idx]), 4),
+                    "overall": round(ov, 4),
+                })
+            vectorized = bool(matched)
+    except ImportError:
+        pass   # 无 numpy → 回退逐条路径
+    if not vectorized:
+        # 逐条路径（小库或无 numpy）
+        for record in store.all():
+            # 直接传原始记录：相似度模块兼容 KM 布局（免重建 view，大库扫描更快）
+            sims = component_similarities(current_compact, current_db, current_sys, record)
+            level = match_level(sims["overall"])
+            if level is None:
+                continue
+            matched.append({"record": record, "level": level, **sims})
 
-    # 排序：综合相似度降序，record_id 升序（确定性）
+    # 排序：综合相似度降序，record_id 升序（确定性；向量化路径已降序，此排序幂等）
     matched.sort(key=lambda m: (-m["overall"], m["record"]["record_id"]))
 
     # ---- top-K 截断（summary 统计仍基于全部匹配）----

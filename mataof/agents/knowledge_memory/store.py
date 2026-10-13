@@ -40,6 +40,7 @@ class MemoryStore:
         self._pending_saves = 0
         self._lock = threading.Lock()
         self._write_lock = threading.Lock()   # 串行化文件写（tmp 路径并发写保护）
+        self._vec_mat = None                  # 向量化相似度矩阵缓存（不持久化，惰性构建）
         if path and os.path.exists(path):
             self._load()
 
