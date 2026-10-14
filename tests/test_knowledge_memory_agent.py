@@ -328,6 +328,35 @@ def test_retrieve_no_truncation_by_default():
     assert r["truncated"] is None
 
 
+def test_decision_reuses_precomputed_similarity(monkeypatch):
+    """H1：检索记录携带 similarity 时，决策端不再重算。"""
+    from mataof.agents.optimization_decision import decide
+    import mataof.similarity as sim_mod
+
+    def _fail_if_called(*a, **k):
+        raise AssertionError("预计算 similarity 存在时不应重算")
+
+    monkeypatch.setattr(sim_mod, "record_similarity", _fail_if_called)
+    analysis = analyze(NARROW_Q, query_id="q1")
+    records = [{
+        "record_id": "r1", "record_time": 1700000000000,
+        "similarity": 0.7,                       # 预计算值
+        "query_features": {}, "database_state": {}, "system_state": {},
+        "strategy": {"time_pruning": "partition_pruning"},
+        "execution_feedback": {"latency_ms": 10.0},
+    }]
+    r = decide({"query_analysis": analysis, "historical_records": records})
+    used = [h for h in r["evidence"]["historical_records"] if h.get("record_id")]
+    assert used and used[0]["similarity"] == 0.7
+    # 无 similarity 的旧格式输入仍走重算路径（兼容）
+    monkeypatch.setattr(sim_mod, "record_similarity",
+                        lambda *a, **k: 0.6)
+    records[0].pop("similarity")
+    r2 = decide({"query_analysis": analysis, "historical_records": records})
+    used2 = [h for h in r2["evidence"]["historical_records"] if h.get("record_id")]
+    assert used2 and used2[0]["similarity"] == 0.6
+
+
 def test_runner_evidence_bounded(tmp_path):
     # runner 默认 knowledge_max_records=100：证据清单有界
     rf = tmp_path / "results.json"
@@ -349,3 +378,164 @@ def test_stats():
     assert s["total_records"] == 5
     assert s["strategy_statistics"][SID_PRUNE]["total"] == 3
     assert s["strategy_statistics"][SID_PRUNE]["success"] == 3
+
+
+# ---------------------------------------------------------------------------
+# 等价性：融合快路径 vs 参考逐条路径（检索聚合优化第三步）
+# ---------------------------------------------------------------------------
+
+SID_AGG = ("time_pruning=partition_pruning|filter_order=not_applicable|"
+           "aggregation_placement=final_level_aggregation")
+AGG_DIM = {"time_pruning": "partition_pruning", "filter_order": "not_applicable",
+           "aggregation_placement": "final_level_aggregation"}
+
+
+def _seed_mixed(km: KnowledgeMemoryAgent, n_dup: int = 2) -> None:
+    """播种多样记录；n_dup 轮完全相同的特征组合 → 制造同分并列（验证证据排序）。"""
+    qs = [NARROW_Q, MEDIUM_Q, AGG_Q]
+    sids = [SID_PRUNE, SID_SCAN, SID_AGG]
+    dims = [PRUNE, SCAN, AGG_DIM]
+    for i in range(n_dup):
+        for j, q in enumerate(qs):
+            lat = 10.0 + 15.0 * j
+            _ingest(km, f"m{i}-{j}", q, sids[j], dims[j],
+                    {"response_time_ms": lat},
+                    {"response_time_ms": lat + 20.0},
+                    timestamp=1700000000000 + i * 3_600_000)
+
+
+def _force_scalar_retrieve(monkeypatch):
+    """让 retrieve 内部 import numpy 失败 → 强制逐条参考路径。"""
+    import builtins
+    real_import = builtins.__import__
+
+    def _no_numpy(name, *a, **k):
+        if name == "numpy":
+            raise ImportError("test: numpy disabled")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _no_numpy)
+
+
+def test_retrieve_fused_path_equals_reference_path(monkeypatch):
+    """优化后的融合快路径与逐条参考路径输出**全字段一致**。
+
+    覆盖：top-K matched_records（含相似度数值与顺序）、historical_summary
+    （成功/失败模式、策略统计）、match_counts、knowledge_confidence、
+    truncated、matched_records_for_decision（证据排序）。
+    """
+    km = KnowledgeMemoryAgent()
+    _seed_mixed(km, n_dup=3)   # 含同分并列
+    analysis = analyze(NARROW_Q, query_id="cmp")
+    db_state = {"device_scale": 1000, "data_scale_level": "small"}
+
+    r_fast = km.retrieve(analysis, database_state=db_state, query_id="cmp",
+                         max_records=3)
+    assert r_fast["match_counts"]["strong"] > 0          # 非平凡匹配
+
+    _force_scalar_retrieve(monkeypatch)
+    r_ref = km.retrieve(analysis, database_state=db_state, query_id="cmp",
+                        max_records=3)
+
+    assert r_ref == r_fast
+
+
+def test_retrieve_decision_equivalence(monkeypatch):
+    """证据 → 最终决策逐字段一致（第三步：验证最终决策）。"""
+    km = KnowledgeMemoryAgent()
+    _seed_mixed(km, n_dup=3)
+    analysis = analyze(MEDIUM_Q, query_id="dec")
+    db_state = {"device_scale": 1000, "data_scale_level": "small"}
+
+    r_fast = km.retrieve(analysis, database_state=db_state, query_id="dec",
+                         max_records=10)
+    d_fast = decide({
+        "query_id": "dec", "query_analysis": analysis,
+        "database_state": db_state, "system_state": None,
+        "historical_records": r_fast["matched_records_for_decision"],
+        "reference_time": 1700000000000,
+    })
+    assert d_fast["selected_strategy"]["strategy_id"]     # 决策非平凡
+
+    _force_scalar_retrieve(monkeypatch)
+    r_ref = km.retrieve(analysis, database_state=db_state, query_id="dec",
+                        max_records=10)
+    d_ref = decide({
+        "query_id": "dec", "query_analysis": analysis,
+        "database_state": db_state, "system_state": None,
+        "historical_records": r_ref["matched_records_for_decision"],
+        "reference_time": 1700000000000,
+    })
+
+    assert r_ref == r_fast
+    assert d_ref == d_fast
+
+
+def test_aggregate_rows_equals_aggregate_matches():
+    """投影行快路径与参考聚合在相同输入下返回逐字段一致的 7 元组。"""
+    km = KnowledgeMemoryAgent()
+    _seed_mixed(km, n_dup=2)
+    store = km.store
+
+    import numpy as np
+    from mataof.similarity import (build_vector_matrix, compact_features,
+                                   vectorized_similarities)
+    from mataof.agents.knowledge_memory.retrieval import (_agg_rows,
+                                                          _aggregate_matches,
+                                                          _aggregate_rows)
+
+    an = analyze(NARROW_Q, query_id="x")
+    cur = compact_features(an)
+    db_state = {"device_scale": 1000, "data_scale_level": "small"}
+    mat = build_vector_matrix(store)
+    q_s, db_s, sy_s, overall = vectorized_similarities(cur, db_state, None, mat)
+    order = np.argsort(-overall, kind="stable")
+
+    rows = _agg_rows(store)
+    fast = _aggregate_rows(rows, order, overall, q_s, db_s, sy_s,
+                           mat["records"], 3)
+    ref = _aggregate_matches(
+        ((mat["records"][i], float(overall[i]), float(q_s[i]),
+          float(db_s[i]), float(sy_s[i])) for i in order), 3)
+    assert fast == ref
+
+
+def test_agg_rows_cache_consistent_after_append():
+    """投影行缓存 append-only 增量：追加记录后行数与库一致、检索结果正常。"""
+    km = KnowledgeMemoryAgent()
+    _seed_mixed(km, n_dup=2)
+    store = km.store
+
+    from mataof.agents.knowledge_memory.retrieval import _agg_rows
+    rows1 = _agg_rows(store)
+    assert len(rows1) == store.count() == 6
+
+    _ingest(km, "extra", AGG_Q, SID_AGG, AGG_DIM, {"response_time_ms": 30.0},
+            {"response_time_ms": 55.0}, timestamp=1700000000000)
+    rows2 = _agg_rows(store)
+    assert len(rows2) == store.count() == 7
+    assert rows2[:6] == rows1                    # 旧行原样保留（append-only）
+
+    an = analyze(AGG_Q, query_id="c2")
+    r = km.retrieve(an, database_state={"device_scale": 1000,
+                                        "data_scale_level": "small"},
+                    query_id="c2", max_records=100)
+    # 新记录已参与匹配（max_records=100 ≥ 全匹配数 → 全部列出）
+    listed_ids = [m["record_id"] for m in r["matched_records"]]
+    assert "rec00000007" in listed_ids
+
+
+def test_retrieve_timing_out_diagnostic():
+    """timing_out 只作诊断侧信道：返回值保持确定性（不含计时字段）。"""
+    from mataof.agents.knowledge_memory.retrieval import retrieve
+    km = KnowledgeMemoryAgent()
+    _seed_mixed(km, n_dup=1)
+    an = analyze(NARROW_Q, query_id="t1")
+
+    r1 = retrieve(km.store, an, None, None, "t1")
+    timing: dict = {}
+    r2 = retrieve(km.store, an, None, None, "t1", timing_out=timing)
+    assert r1 == r2                              # 计时不影响输出
+    assert "timing_ms" not in r2
+    for key in ("matrix_ms", "scan_ms", "argsort_ms", "match_loop_ms", "total_ms"):
+        assert key in timing and timing[key] >= 0

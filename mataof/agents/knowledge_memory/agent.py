@@ -46,14 +46,28 @@ class KnowledgeMemoryAgent:
     description = "历史查询/策略/执行结果的结构化存储、检索、关联与更新。"
 
     def __init__(self, store_path: Optional[str] = None,
-                 llm: Optional[object] = None, save_interval: int = 1):
-        """store_path=None 时仅内存保存；给定路径时 JSON 持久化。
+                 llm: Optional[object] = None, save_interval: int = 1,
+                 backend: str = "json"):
+        """store_path=None 时仅内存保存；给定路径时按 backend 持久化。
+
+        backend：持久化层实现（持久化层改造实验）——
+          "json"   整库 JSON 快照（现状，默认）；
+          "jsonl"  追加式 JSON Lines + 元数据小文件（写入 O(新增)）；
+          "sqlite" SQLite 增量 INSERT（事务提交，写入 O(新增)）。
+        三者同协议、同内存结构、同检索语义（等价性由测试保证）。
 
         llm：可选 LLMClient（混合增强模式）——只生成 llm_analysis 附加节与
         经验总结（llm_note），不影响检索与入库的确定性核心；失败自动兜底。
         save_interval：批量落盘间隔（B5，默认 1=每次保存；大库实验建议 20~50）。
         """
-        self.store = MemoryStore(store_path, save_interval=save_interval)
+        if backend == "jsonl":
+            from mataof.agents.knowledge_memory.jsonl_store import JSONLStore
+            self.store = JSONLStore(store_path, save_interval=save_interval)
+        elif backend == "sqlite":
+            from mataof.agents.knowledge_memory.sqlite_store import SQLiteStore
+            self.store = SQLiteStore(store_path, save_interval=save_interval)
+        else:
+            self.store = MemoryStore(store_path, save_interval=save_interval)
         self.llm = llm
 
     # ------------------------------------------------------------------

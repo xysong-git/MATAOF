@@ -77,6 +77,7 @@ class RunnerConfig:
     """PipelineRunner 配置。所有字段可缺省（安全默认）。"""
 
     knowledge_store: Optional[str] = None       # 知识库文件路径
+    knowledge_backend: str = "json"             # 持久化层：json（整库快照）/ jsonl（追加式）/ sqlite（增量 INSERT）
     results_dir: Optional[str] = None           # 追踪输出目录
     executor: Any = None                        # null / file / 自定义对象
     database_state: dict = field(default_factory=dict)
@@ -116,7 +117,8 @@ class PipelineRunner:
         self.config = config
         self.llm = build_llm_client(config.llm)   # None → 确定性路径（兜底）
         self.km = KnowledgeMemoryAgent(store_path=config.knowledge_store, llm=self.llm,
-                                       save_interval=config.knowledge_save_interval)
+                                       save_interval=config.knowledge_save_interval,
+                                       backend=config.knowledge_backend)
         self.executor: Executor = build_executor(config.executor)
         # 每次运行生成唯一 run_id：自动 query_id 的前缀（同名文件不覆盖）
         self.run_id = config.run_id or time.strftime("%Y%m%d-%H%M%S")
@@ -166,7 +168,12 @@ class PipelineRunner:
         """执行一次完整闭环，返回追踪记录（也写入 results_dir）。
 
         query_id 缺省时自动生成 f"{run_id}-{seq:04d}"（每次运行唯一，不覆盖历史结果）。
+
+        计时（D8）：全链路 perf_counter 墙钟，写入 trace["overhead"]——
+        优化机制各行为成本（分析/检索/决策/监控/入库分项 + 合计）与端到端
+        （end_to_end_ms，请求进入 → 查询结果就绪）。纯 runner 计时，不碰 Agent 输出。
         """
+        t_entry = time.perf_counter()
         with self._seq_lock:
             self._seq += 1
             seq = self._seq
@@ -177,6 +184,7 @@ class PipelineRunner:
 
         # 1. 分析（LLM 增强可选；不可用自动回退确定性路径）
         analysis = analyze(query, query_id=query_id, llm=llm)
+        t_analysis = time.perf_counter()
         # 2. 知识检索（历史证据；runner 链路关闭检索解读 LLM——决策只消费结构化记录）
         #    fixed 模式（Baseline 2）不使用历史，跳过检索
         if self.config.fixed_strategy:
@@ -190,6 +198,7 @@ class PipelineRunner:
                 llm_summary=False,
                 max_records=self.config.knowledge_max_records,
             )
+        t_retrieval = time.perf_counter()
         # 3. 决策（LLM 增强可选；bonus 开关来自配置 llm 节）
         decision_input = {
             "query_id": query_id,
@@ -210,10 +219,12 @@ class PipelineRunner:
             decision = self._fixed_decision(analysis, query_id)
         else:
             decision = decide(decision_input, llm=llm)
+        t_decision = time.perf_counter()
         # 4. 执行（真实执行层；NullExecutor 时不产生任何指标）
         execution: ExecutionResult = self.executor.execute(
             query, query_id, decision.get("selected_strategy") or {}
         )
+        t_execution = time.perf_counter()
         # 5. 监控（事实采集，确定性）
         monitoring_input = {
             "query_id": query_id,
@@ -225,6 +236,7 @@ class PipelineRunner:
             "thresholds": self.config.thresholds or None,
         }
         feedback = monitor(monitoring_input, llm=None)
+        t_monitoring = time.perf_counter()
         # B1：合并 LLM 调用（监控解读 + KM 经验总结一次完成，4→3 次/条）
         experience_note: Optional[str] = None
         if llm is not None:
@@ -251,6 +263,7 @@ class PipelineRunner:
             "system_state": self.config.system_state,
             "timestamp": execution.timestamp,
         }, experience_note=experience_note, use_llm=False)
+        t_update = time.perf_counter()
 
         trace = {
             "query_id": query_id,
@@ -272,6 +285,28 @@ class PipelineRunner:
             },
             "monitoring": feedback,
             "knowledge_update": knowledge_update,
+        }
+        # ---- D8：优化机制各阶段成本与端到端计时（纯 runner 墙钟；不碰 Agent 输出）----
+        ms = lambda t0, t1: round((t1 - t0) * 1000.0, 2)  # noqa: E731
+        stage = {
+            "analysis_ms": ms(t_entry, t_analysis),
+            "retrieval_ms": ms(t_analysis, t_retrieval),
+            "decision_ms": ms(t_retrieval, t_decision),
+            # 执行阶段含 baseline 配对双执行，与 response_time_ms 不是同一口径
+            "execution_stage_ms": ms(t_decision, t_execution),
+            "monitoring_ms": ms(t_execution, t_monitoring),
+            "knowledge_update_ms": ms(t_monitoring, t_update),
+        }
+        trace["overhead"] = {
+            **stage,
+            # 优化机制自身成本合计（各行为之和，不含执行）
+            "pipeline_overhead_ms": round(
+                sum(v for k, v in stage.items() if k != "execution_stage_ms"), 2),
+            # 端到端：请求进入优化系统 → 查询结果就绪（含决策开销与执行；
+            # 监控/入库是执行后的收尾，不在用户等待路径上）
+            "end_to_end_ms": ms(t_entry, t_execution),
+            # 异步 LLM 推理补写耗时（同步模式/未采样 → None；不计入端到端）
+            "llm_backfill_ms": None,
         }
         trace_path = self._write_trace(trace)
         if trace_path:
@@ -299,7 +334,11 @@ class PipelineRunner:
 
     def _backfill_llm(self, trace: dict, query: str,
                       decision_input: dict, monitoring_input: dict) -> None:
-        """后台补写：QA 摘要 + 决策解读 + 合并（监控解读+经验总结）。任何失败只记录。"""
+        """后台补写：QA 摘要 + 决策解读 + 合并（监控解读+经验总结）。任何失败只记录。
+
+        计时：llm_backfill_ms 记入 trace["overhead"]（异步尾延迟，不计入主链路）。
+        """
+        t_backfill = time.perf_counter()
         try:
             from mataof.agents.query_analysis.llm_enhance import (
                 build_llm_analysis as qa_build,
@@ -337,6 +376,8 @@ class PipelineRunner:
             trace.setdefault("llm_backfill_notes", []).append(
                 f"异步增强失败：{type(exc).__name__}")
         finally:
+            trace.setdefault("overhead", {})["llm_backfill_ms"] = \
+                round((time.perf_counter() - t_backfill) * 1000.0, 2)
             self._rewrite_trace_file(trace)
 
     def _rewrite_trace_file(self, trace: dict) -> None:
@@ -551,6 +592,7 @@ class PipelineRunner:
     # 追踪落盘
     # ------------------------------------------------------------------
     def _write_trace(self, trace: dict) -> Optional[str]:
+        """写完整追踪记录（防同名覆盖）并追加 run_log 汇总行；返回文件路径。"""
         if not self.config.results_dir:
             return None
         os.makedirs(self.config.results_dir, exist_ok=True)
@@ -563,9 +605,10 @@ class PipelineRunner:
             path = f"{base}-{n}.json"
         with open(path, "w", encoding="utf-8") as f:
             json.dump(trace, f, ensure_ascii=False, indent=2)
-        # 汇总行（追加，实验分析用）
+        # 汇总行（追加，实验分析用；含 D8 各阶段成本与端到端）
         decision = trace["decision"]
         mon = trace["monitoring"]
+        ov = trace.get("overhead") or {}
         summary = {
             "run_id": self.run_id,
             "query_id": query_id,
@@ -581,6 +624,14 @@ class PipelineRunner:
             "baseline_response_time_ms": (
                 trace["execution"].get("baseline_metrics") or {}
             ).get("response_time_ms"),
+            # D8：优化机制各阶段成本 + 端到端（run_log 供轮次汇总聚合）
+            "analysis_ms": ov.get("analysis_ms"),
+            "retrieval_ms": ov.get("retrieval_ms"),
+            "decision_ms": ov.get("decision_ms"),
+            "monitoring_ms": ov.get("monitoring_ms"),
+            "knowledge_update_ms": ov.get("knowledge_update_ms"),
+            "pipeline_overhead_ms": ov.get("pipeline_overhead_ms"),
+            "end_to_end_ms": ov.get("end_to_end_ms"),
             "cpu_utilization": mon["metrics"].get("cpu_utilization"),
             "cpu_utilization_peak": mon["metrics"].get("cpu_utilization_peak"),
             "memory_utilization": mon["metrics"].get("memory_utilization"),
@@ -616,6 +667,7 @@ def load_config_file(path: str) -> RunnerConfig:
         data = json.load(f)
     return RunnerConfig(
         knowledge_store=data.get("knowledge_store"),
+        knowledge_backend=str(data.get("knowledge_backend") or "json"),
         results_dir=data.get("results_dir"),
         executor=data.get("executor"),
         database_state=data.get("database_state") or {},

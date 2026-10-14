@@ -41,17 +41,49 @@ def test_aggregate_native_empty(tmp_path):
     assert r["success_rate"] is None
 
 
+def test_aggregate_native_jsonl(tmp_path):
+    # 新格式：run_native_client.py 输出（客户端墙钟，与 agent 同口径）
+    f = tmp_path / "a.jsonl"
+    rows = [
+        {"query_id": "q1", "execution_status": "success", "response_time_ms": 10.0},
+        {"query_id": "q2", "execution_status": "success", "response_time_ms": 20.0},
+        {"query_id": "q3", "execution_status": "failed", "response_time_ms": None},
+        {"batch": True, "query_id": None, "batch_total_time_s": 1.5, "batch_queries": 3},
+    ]
+    f.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+                 encoding="utf-8")
+    r = json.loads(_run("aggregate_native.py", "--json", str(f)))
+    assert r["executions"] == 3
+    assert r["status"] == {"success": 2, "failed": 1, "timeout": 0, "unknown": 0}
+    assert r["success_rate"] == round(2 / 3, 4)
+    l = r["latency_ms"]
+    assert l["samples"] == 2 and l["avg_ms"] == 15.0
+    assert l["min_ms"] == 10.0 and l["max_ms"] == 20.0
+    assert l["p50_ms"] == 10.0 and l["p95_ms"] == 20.0
+    assert r["total_time_s"] == 1.5
+    assert r["throughput_qps"] == 2.0
+    # 格式化输出含口径说明
+    text = _run("aggregate_native.py", str(f))
+    assert "客户端墙钟" in text and "成功率" in text
+
+
 def test_aggregate_agent(tmp_path):
     f = tmp_path / "run_log.jsonl"
     rows = [
         {"query_id": "q1", "execution_status": "success", "response_time_ms": 10.0,
          "performance_assessment": "improved",
          "baseline_response_time_ms": 50.0,
+         "analysis_ms": 2.0, "retrieval_ms": 0.5, "decision_ms": 0.3,
+         "monitoring_ms": 0.1, "knowledge_update_ms": 0.1,
+         "pipeline_overhead_ms": 3.0, "end_to_end_ms": 40.0,
          "cpu_utilization": 0.1, "cpu_utilization_peak": 0.4,
          "memory_utilization": 0.2, "memory_utilization_peak": 0.5},
         {"query_id": "q2", "execution_status": "success", "response_time_ms": 20.0,
          "performance_assessment": "unchanged",
          "baseline_response_time_ms": 40.0,
+         "analysis_ms": 1.0, "retrieval_ms": 0.2, "decision_ms": 0.2,
+         "monitoring_ms": 0.1, "knowledge_update_ms": 0.1,
+         "pipeline_overhead_ms": 1.6, "end_to_end_ms": 30.0,
          "cpu_utilization": 0.2, "cpu_utilization_peak": 0.5,
          "memory_utilization": 0.3, "memory_utilization_peak": 0.6},
         {"query_id": "q3", "execution_status": "failed", "response_time_ms": None,
@@ -79,6 +111,16 @@ def test_aggregate_agent(tmp_path):
     res = r["resource_utilization"]
     assert res["cpu"]["avg"] == 0.15 and res["cpu_peak"]["max"] == 0.5
     assert res["memory_peak"]["max"] == 0.6
+    # D8：分阶段成本归因 + 端到端 + 净开销（与批次汇总同口径；缺字段的行跳过）
+    sc = r["stage_cost_ms"]
+    assert sc["samples"] == 2
+    assert sc["analysis_ms"] == {"samples": 2, "avg_ms": 1.5}
+    assert sc["retrieval_ms"]["avg_ms"] == 0.35
+    assert sc["pipeline_total_ms"] == {"samples": 2, "avg_ms": 2.3}
+    e2e = r["end_to_end_ms"]
+    assert e2e["samples"] == 2 and e2e["avg_ms"] == 35.0
+    assert e2e["min_ms"] == 30.0 and e2e["max_ms"] == 40.0
+    assert r["net_overhead_ms"] == -10.0          # 35 − (50+40)/2
 
 
 def test_aggregate_agent_formatted_like_batch_summary(tmp_path):
@@ -87,6 +129,10 @@ def test_aggregate_agent_formatted_like_batch_summary(tmp_path):
                              "response_time_ms": 10.0,
                              "performance_assessment": "improved",
                              "baseline_response_time_ms": 50.0,
+                             "analysis_ms": 2.0, "retrieval_ms": 0.5,
+                             "decision_ms": 0.3, "monitoring_ms": 0.1,
+                             "knowledge_update_ms": 0.1,
+                             "pipeline_overhead_ms": 3.0, "end_to_end_ms": 40.0,
                              "cpu_utilization": 0.1, "cpu_utilization_peak": 0.1,
                              "memory_utilization": 0.2, "memory_utilization_peak": 0.2})
                  + "\n"
@@ -95,7 +141,8 @@ def test_aggregate_agent_formatted_like_batch_summary(tmp_path):
                  + "\n", encoding="utf-8")
     text = _run("aggregate_agent.py", str(f))
     for key in ("查询数", "总用时", "吞吐", "成功率", "效果分布", "延迟（成功执行",
-                "P50", "P95", "P99", "baseline 延迟", "资源"):
+                "P50", "P95", "P99", "baseline 延迟", "资源",
+                "决策开销·各阶段", "端到端（进入→结果", "净开销"):
         assert key in text, f"汇总缺失字段: {key}"
 
 

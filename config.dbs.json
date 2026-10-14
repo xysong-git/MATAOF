@@ -1,5 +1,6 @@
 {
-  "knowledge_store": "data/knowledge_dbs.json",
+  "knowledge_store": "data/knowledge_dbs.db",
+  "knowledge_backend": "sqlite",
   "results_dir": "results/round_dbs",
   "executor": {
     "type": "iotdb",

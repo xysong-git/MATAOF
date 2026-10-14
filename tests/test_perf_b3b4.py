@@ -158,3 +158,31 @@ def test_async_run_statements_drains(tmp_path):
     for t in traces:
         assert t["analysis"]["llm_analysis"]["available"] is True
     assert llm.calls >= 3 * 3   # 每条 3 个异步任务（QA/决策/合并）
+
+
+class SlowLLM(CountingLLM):
+    def chat(self, messages, max_tokens=2048, timeout_s=60.0):
+        time.sleep(0.3)
+        return super().chat(messages, max_tokens=max_tokens, timeout_s=timeout_s)
+
+
+def test_wait_llm_tasks_timeout_zero_no_wait(tmp_path):
+    llm = SlowLLM()
+    runner = _runner(tmp_path, llm)
+    traces = runner.run_statements([NARROW_Q] * 3, source="t.sql",
+                                   drain_llm=False)   # 不排空
+    t0 = time.time()
+    pending = runner.wait_llm_tasks(timeout_s=0.0)     # 不等待
+    assert time.time() - t0 < 0.5
+    assert pending > 0                                # 任务仍在后台
+    runner.wait_llm_tasks()                           # 最终排空（API 语义不变）
+    for t in traces:
+        assert t["analysis"]["llm_analysis"]["available"] is True
+
+
+def test_wait_llm_tasks_timeout_positive(tmp_path):
+    llm = SlowLLM()
+    runner = _runner(tmp_path, llm)
+    runner.run_statements([NARROW_Q] * 3, source="t.sql", drain_llm=False)
+    pending = runner.wait_llm_tasks(timeout_s=5.0)    # 足够全部完成
+    assert pending == 0

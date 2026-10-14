@@ -1,5 +1,6 @@
 {
-  "knowledge_store": "data/knowledge.json",
+  "knowledge_store": "data/knowledge.db",
+  "knowledge_backend": "sqlite",
   "results_dir": "results",
   "executor": {"type": "null"},
   "database_state": {},
@@ -15,6 +16,11 @@
     "model": "",
     "timeout_s": 60,
     "max_tokens": 2048,
-    "log_file": "data/llm_log.jsonl"
+    "log_file": "data/llm_log.jsonl",
+    "sample_rate": 10,
+    "async_enhance": true,
+    "async_workers": 2,
+    "cache_file": "data/llm_cache.json",
+    "preference_bonus": false
   }
 }

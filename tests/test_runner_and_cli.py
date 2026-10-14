@@ -113,6 +113,40 @@ def test_runner_closed_loop_reuses_history(tmp_path):
     assert len(lines) == 2 and lines[1]["query_id"] == "q2"
 
 
+def test_runner_overhead_timing(tmp_path):
+    # D8：trace["overhead"] 含各阶段成本 + 合计 + 端到端（进入→结果）；
+    # 落盘文件与 run_log 行同样携带分阶段字段
+    rf = _results_file(tmp_path, [])
+    results_dir = str(tmp_path / "results")
+    runner = PipelineRunner(RunnerConfig(
+        results_dir=results_dir, executor={"type": "file", "results_file": rf}))
+    t = runner.run_query(NARROW_Q, query_id="q1")
+    ov = t["overhead"]
+    for key in ("analysis_ms", "retrieval_ms", "decision_ms", "execution_stage_ms",
+                "monitoring_ms", "knowledge_update_ms", "pipeline_overhead_ms",
+                "end_to_end_ms", "llm_backfill_ms"):
+        assert key in ov, f"overhead 缺失字段: {key}"
+    assert ov["end_to_end_ms"] is not None
+    assert ov["llm_backfill_ms"] is None          # 非异步 LLM 模式 → None
+    assert ov["pipeline_overhead_ms"] >= 0
+    # 端到端（进入→结果）= 执行前开销 + 执行阶段 → 必 ≥ 执行前开销
+    pre_exec = round(ov["analysis_ms"] + ov["retrieval_ms"] + ov["decision_ms"], 2)
+    assert ov["end_to_end_ms"] >= pre_exec
+    # 分项一致性：合计 = 各非执行阶段之和
+    stage_sum = round(ov["analysis_ms"] + ov["retrieval_ms"] + ov["decision_ms"]
+                      + ov["monitoring_ms"] + ov["knowledge_update_ms"], 2)
+    assert ov["pipeline_overhead_ms"] == stage_sum
+    # 落盘文件与 run_log 行均携带分阶段字段
+    saved = json.loads(open(os.path.join(results_dir, "q1.json"),
+                            encoding="utf-8").read())
+    assert saved["overhead"]["end_to_end_ms"] is not None
+    row = json.loads((tmp_path / "results" / "run_log.jsonl")
+                     .read_text(encoding="utf-8").splitlines()[0])
+    for key in ("analysis_ms", "retrieval_ms", "decision_ms", "monitoring_ms",
+                "knowledge_update_ms", "pipeline_overhead_ms", "end_to_end_ms"):
+        assert row[key] is not None, f"run_log 缺失字段: {key}"
+
+
 def test_runner_run_file_sql(tmp_path):
     rf = _results_file(tmp_path, [])
     runner = PipelineRunner(RunnerConfig(

@@ -56,8 +56,11 @@ FIXED_STRATEGY = {
 
 
 def base_config(scale: str, mode: str) -> dict:
+    # 持久化层（D8b 第五步实测结论）：sqlite 增量 INSERT——写入 291× 于整库 JSON
+    # 快照；加载 2s/51k（一次性）；事务崩溃安全。知识库路径用 .db 扩展名。
     cfg = {
-        "knowledge_store": f"data/knowledge_{mode_prefix(scale, mode)}.json",
+        "knowledge_store": f"data/knowledge_{mode_prefix(scale, mode)}.db",
+        "knowledge_backend": "sqlite",
         "results_dir": f"results/round_{mode_prefix(scale, mode)}",
         "executor": dict(EXECUTOR),
         "database_state": {"data_scale_level": SCALES[scale]},
@@ -91,7 +94,7 @@ def main() -> None:
             print(f"生成 {fname}")
     # local-llm：dbs 规模的 LLM 配置，独立知识库与结果目录
     local = base_config("dbs", "llm")
-    local["knowledge_store"] = "data/knowledge_local.json"
+    local["knowledge_store"] = "data/knowledge_local.db"
     local["results_dir"] = "results/round_local_llm"
     with open(os.path.join(ROOT, "config.local-llm.json"), "w", encoding="utf-8") as f:
         json.dump(local, f, ensure_ascii=False, indent=2)

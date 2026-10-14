@@ -63,23 +63,6 @@ if [[ "$MODE" == "llm" ]]; then
   echo "[预检] vLLM 可用：$LLM_URL"
 fi
 
-# 原生模式的语句取样（与 Agent 模式同语义、同种子可复现；纯 stdlib）
-sample_lines() { # file limit mode seed
-  python3 - "$1" "${2:-0}" "$3" "$4" <<'PY'
-import random, sys
-lines = [l for l in open(sys.argv[1], encoding="utf-8")
-         if l.strip() and not l.strip().startswith("--")]
-limit = int(sys.argv[2])
-if limit > 0 and limit < len(lines):
-    if sys.argv[3] == "random":
-        idx = sorted(random.Random(int(sys.argv[4])).sample(range(len(lines)), limit))
-        lines = [lines[i] for i in idx]
-    else:
-        lines = lines[:limit]
-sys.stdout.write("".join(lines))
-PY
-}
-
 # 组装查询目录列表：--query-dir 优先（单目录，忽略 --scales），否则按规模展开
 qdirs=()
 if [[ -n "$QUERY_DIR" ]]; then
@@ -111,7 +94,8 @@ done
 total_files=${#file_list[@]}
 
 if [[ "$MODE" == "native" ]]; then
-  # native：逐文件管道执行（保持原逻辑）
+  # native：逐文件客户端直发原始 SQL（与 agent 模式同一客户端/同一计时代码，
+  # 采样与 agent 共用 sample_items——同种子同抽样，口径一致）
   file_no=0
   for f in "${file_list[@]}"; do
     name=$(basename "$f" .sql)
@@ -119,12 +103,10 @@ if [[ "$MODE" == "native" ]]; then
     [[ -n "$scale" ]] || scale=${SCALES%%,*}
     file_no=$((file_no + 1))
     echo "== 文件 [$file_no/$total_files] $scale/$name =="
-    out="$ROOT/results_baseline/${scale}_${name}.out"
-    mkdir -p "$(dirname "$out")"
-    sample_lines "$f" "$PER_FILE_LIMIT" "$SAMPLE" "$SEED" \
-      | bash "$IOTDB_BIN/sbin/start-cli.sh" -h 127.0.0.1 -p 6667 -u root -pw root \
-        > "$out" 2>&1
-    echo "[native] 完成 $scale/$name → $out"
+    out="$ROOT/results_baseline/${scale}_${name}.jsonl"
+    python3 "$ROOT/scripts/run_native_client.py" --file "$f" --out "$out" \
+      ${PER_FILE_LIMIT:+--per-file-limit "$PER_FILE_LIMIT"} \
+      --sample "$SAMPLE" --seed "$SEED"
   done
 else
   # agent/llm/fixed：每规模一次 mataof 调用（多文件并行处理；
@@ -156,8 +138,8 @@ echo "本轮墙钟总用时: $(( $(date +%s) - start ))s"
 # 汇总报告
 case "$MODE" in
   native)
-    echo "== 原生 baseline 汇总 =="
-    python3 "$ROOT/scripts/aggregate_native.py" "$ROOT"/results_baseline/*.out
+    echo "== 原生 baseline 汇总（客户端墙钟，与 agent 同口径）=="
+    python3 "$ROOT/scripts/aggregate_native.py" "$ROOT"/results_baseline/*.jsonl
     ;;
   agent)
     echo "== Agent 模式汇总（轮次 $ROUND_ID）=="

@@ -25,12 +25,18 @@ mataof run --config config.dbs.json \
 
 | 配置文件 | 规模 | 知识库 | 追踪输出目录 |
 |---|---|---|---|
-| `config.dbs.json` | small（root.dbs.g_0） | `data/knowledge_dbs.json` | `results/round_dbs/` |
-| `config.dbm.json` | medium（root.dbm.g_0） | `data/knowledge_dbm.json` | `results/round_dbm/` |
-| `config.dbl.json` | large（root.dbl.g_0） | `data/knowledge_dbl.json` | `results/round_dbl/` |
+| `config.dbs.json` | small（root.dbs.g_0） | `data/knowledge_dbs.db` | `results/round_dbs/` |
+| `config.dbm.json` | medium（root.dbm.g_0） | `data/knowledge_dbm.db` | `results/round_dbm/` |
+| `config.dbl.json` | large（root.dbl.g_0） | `data/knowledge_dbl.db` | `results/round_dbl/` |
 
 三个配置均启用真实 IoTDB 执行与 **baseline 实测**（每条查询执行两次：原查询 +
 策略查询）。`database_state.data_scale_level` 用于历史相似度区分规模。
+
+**知识库持久化层**（D8b 第五步实测选定）：`"knowledge_backend": "sqlite"`——
+增量 INSERT 持久化（51k 库写入 12.7ms/条 vs 整库 JSON 快照 3687ms/条，291×；
+事务崩溃安全）。可选值：`json`（整库快照，旧行为）/ `jsonl`（追加式）/ `sqlite`。
+三者同协议、同检索语义（等价性由 `tests/test_knowledge_backends.py` 保证）。
+基准脚本：`scripts/bench_kb.py --kb <全量库> --backends json,jsonl,sqlite`。
 
 ## 1.1 四种运行模式（统一脚本切换）
 
@@ -70,10 +76,12 @@ full_scan / time_first / final_level_aggregation），跳过决策 Agent 与历�
 - 同步 LLM 模式（`async_enhance: false`，需逐条 LLM 参与决策的实验）：
   workers=4 实测提速 1.75×（重叠 LLM 网络等待），此时并行才有效。
 
-**知识库规模与每轮实验**：知识库 append-only 累积，检索成本随库大小线性增长
-（29k 条库单条检索约 400~600ms）。同质查询集下证据很快饱和——**正式实验建议
-每轮使用独立知识库路径**（改配置 `knowledge_store`，或每轮后归档），保持库规模
-可控；需要跨轮累积时再共享同一路径。
+**知识库规模与每轮实验**：知识库 append-only 累积，检索成本随库大小线性增长。
+已实现 **numpy 向量化相似度扫描** + **融合单遍聚合**（D8b：51k 库单条检索
+447~779ms → **86ms**，12.8×；1k 库 4ms）：扫描/聚合不再是大库瓶颈；
+**写入已切换 SQLite 增量持久化**（整库 JSON 快照 3687ms/条 → 12.7ms/条）。
+同质查询集下证据很快饱和——**正式实验仍建议每轮使用独立知识库路径**
+（改配置 `knowledge_store`，或每轮后归档）；需要跨轮累积时再共享同一路径。
 
 **CLI 的 --file 支持多文件与通配符**：`mataof run --file query/queries_dbs/q*.sql ...`
 （shell 展开为多文件，全部按 --file 处理，每文件分别采样）；若位置参数是文件路径
@@ -95,9 +103,51 @@ LLM 模式说明（B4/B3 已默认启用）：
   batch 行提供各批次墙钟总用时 → 总用时与吞吐）；
 - 手动指定轮次：`mataof run --run-id my-round ...`；不加 `--run-id` 的
   aggregate 汇总全部历史（如需）；
-- native：`scripts/aggregate_native.py`（解析 CLI 原生 `It costs` 计时，服务端执行口径）。
+- native：`scripts/aggregate_native.py`（解析 `run_native_client.py` 输出的 .jsonl——
+  客户端墙钟，与 agent **同一客户端/同一段计时代码**；旧 start-cli.sh 的 .out
+  文件仍可解析用于回看历史数据，但口径不同、不直接可比）。
 
-计时口径注意：native 的延迟为服务端执行耗时（不含结果集传输）；agent/llm 为含结果集消费的墙钟时间——对比时注明口径。
+计时口径：四模式的执行延迟统一为**客户端墙钟**（发送 → 完整消费结果集）。
+native 由 `run_native_client.py` 直发原始 SQL 测量（采样与 agent 共用
+`sample_items`，同种子同抽样）；本机 loopback 部署下网络开销可忽略，客户端墙钟
+≈ 服务器执行 + 结果传输。决策开销与端到端指标见 §1.2。
+
+## 1.2 决策开销与端到端指标（D8）
+
+每次运行除执行延迟外，还记录**优化机制各行为自身的成本**与**端到端延迟**
+（trace 顶层 `overhead` 节；批次/轮次汇总输出口径完全一致）。
+
+**决策开销 = 各行为成本归因**（衡量优化机制自身的成本，每条平均，不出分位数）：
+
+| 阶段 | 字段 | 含义 |
+|---|---|---|
+| 查询分析 | `analysis_ms` | Query Analysis Agent 特征提取耗时 |
+| 知识检索 | `retrieval_ms` | 历史证据检索耗时（随知识库规模增长） |
+| 策略决策 | `decision_ms` | 决策 Agent 评分/门控耗时（同步 LLM 模式含推理等待） |
+| 执行监控 | `monitoring_ms` | 执行后事实采集耗时 |
+| 知识入库 | `knowledge_update_ms` | 经验写入知识库耗时 |
+| 合计 | `pipeline_overhead_ms` | 上述之和（不含执行） |
+| LLM 推理（异步） | `llm_backfill_ms` | 异步补写全部 llm_analysis 的耗时（**不计入端到端**） |
+
+汇总中显示为：
+`决策开销·各阶段（每条平均，样本 N）: 分析 Xms | 检索 Xms | ... | 合计 Xms`。
+
+**端到端 = 请求进入优化系统 → 查询结果就绪**（`end_to_end_ms`，含决策开销与
+执行；监控/入库是执行后的收尾，不在用户等待路径上）。端到端是延迟口径
+（avg/min/max/P50/P95/P99），用于判断"实际使用系统是否值得"：
+- 批次/轮次汇总附带 **净开销** = 端到端每条平均 − baseline 执行每条平均
+  （正值 = 优化机制每查询引入的额外时间；净开销明显小于优化节省的执行时间
+  即为值得）。
+
+口径要点：
+- `execution_stage_ms` 含 baseline 配对双执行，与 `response_time_ms`
+  （单次策略执行）不是同一口径，各自展示；
+- 失败/超时的查询同样计入各阶段成本（优化开销照常发生，如实记录）；
+- 同步 LLM 模式下 LLM 推理时间含在对应阶段（分析/决策/监控）内；异步模式
+  单独记录在 `llm_backfill_ms`；
+- run_log 汇总行携带各阶段字段 + `pipeline_overhead_ms` + `end_to_end_ms`，
+  轮次汇总（aggregate_agent）与批次汇总口径完全一致；旧轮次数据无这些字段时
+  如实不计样本。
 
 ## 2. 执行一轮（完整流程）
 
@@ -167,7 +217,7 @@ nohup bash scripts/run_experiment.sh --mode agent \
 
 | 配置 | 主链路每查询 | 全量 6.6 万条主链路 | LLM 产物补齐（llm 模式） |
 |---|---|---|---|
-| native（原生 CLI） | ~15ms（服务端口径） | ≈25 分钟 | — |
+| native（客户端直发，无 Agent） | ~10ms 量级（客户端墙钟，与 agent 同口径） | ≈25 分钟 | — |
 | agent / fixed（无 LLM） | ≈43~200ms（随知识库增长） | ≈**2~4 小时** | — |
 | llm（异步+缓存，默认配置） | ≈43~200ms（**与 agent 相同**） | ≈2~4 小时 | 后台 2 workers：采样 10% 时约 6 小时；**第二轮起缓存命中 → 趋零** |
 | llm 同步（`"async_enhance": false`） | ≈6.3~8.4s（不推荐全量） | 数天 ❌ | — |
@@ -175,8 +225,8 @@ nohup bash scripts/run_experiment.sh --mode agent \
 说明：
 - llm 模式默认 `async_enhance: true` + `cache_file`：**主链路与 agent 模式同速**，
   LLM 解读后台补齐；重复跑同一查询集时缓存命中，后台也几乎零开销；
-- 知识库随运行增长，检索/落盘开销线性上升——全量运行后期每查询约 0.2~0.4s
-  （`knowledge_save_interval=20` 已缓解落盘，检索扫描是主要增长项）；
+- 知识库随运行增长，检索开销线性上升（D8b 后：1k 库 4ms → 51k 库 86ms/条）；
+  落盘已切换 SQLite 增量写入（O(新增)，每文件 flush 不再随库放大）；
 - 需要"逐条同步 LLM 参与"的实验（如 preference_bonus）才关闭 async。
 
 ## 3. 运行中你会看到什么
@@ -196,9 +246,9 @@ nohup bash scripts/run_experiment.sh --mode agent \
 
 | 产出 | 位置 | 内容 |
 |---|---|---|
-| 完整追踪 | `results/<results_dir>/<query_id>.json` | 单条查询的完整决策链：analysis（含 llm_analysis）→ knowledge_retrieval → decision（含 llm_analysis）→ execution（原始实测）→ monitoring（含 llm_analysis）→ knowledge_update |
-| 汇总日志 | `results/<results_dir>/run_log.jsonl` | **追加**的逐行 JSON：query_id、source（来源文件）、query_type、strategy_id、decision_status、execution_status、performance_assessment、anomaly_count、response_time_ms、knowledge_confidence、stored——可直接 pandas 统计 |
-| 知识库 | `data/<knowledge_store>.json` | append-only 历史经验（跨运行累积；含 LLM 经验总结 llm_note） |
+| 完整追踪 | `results/<results_dir>/<query_id>.json` | 单条查询的完整决策链：analysis（含 llm_analysis）→ knowledge_retrieval → decision（含 llm_analysis）→ execution（原始实测）→ monitoring（含 llm_analysis）→ knowledge_update → **overhead（D8：决策开销/端到端计时与分项）** |
+| 汇总日志 | `results/<results_dir>/run_log.jsonl` | **追加**的逐行 JSON：query_id、source（来源文件）、query_type、strategy_id、decision_status、execution_status、performance_assessment、anomaly_count、response_time_ms、**各阶段成本（analysis/retrieval/decision/monitoring/knowledge_update_ms）+ pipeline_overhead_ms + end_to_end_ms（D8）**、knowledge_confidence、stored——可直接 pandas 统计 |
+| 知识库 | `data/<knowledge_store>`（默认 .db = SQLite） | append-only 历史经验（跨运行累积；含 LLM 经验总结 llm_note） |
 | LLM 调用日志 | `data/llm_log.jsonl`（配置 log_file） | 每次 LLM 调用的时间/延迟/状态（含失败原因） |
 | 终端摘要 | stdout | 每查询一行（query_id/类型/策略/状态/评估/异常/知识置信度） |
 
@@ -237,5 +287,5 @@ EOF
 ## 6. 一键自检
 
 ```bash
-python3 -m pytest tests/ -v      # 135+ 例，含真实 IoTDB 集成测试（服务器不可用自动跳过）
+python3 -m pytest tests/ -v      # 246 例，含真实 IoTDB 集成测试（服务器不可用自动跳过）
 ```

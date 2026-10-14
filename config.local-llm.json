@@ -1,5 +1,6 @@
 {
-  "knowledge_store": "data/knowledge_local.json",
+  "knowledge_store": "data/knowledge_local.db",
+  "knowledge_backend": "sqlite",
   "results_dir": "results/round_local_llm",
   "executor": {
     "type": "iotdb",
@@ -18,7 +19,7 @@
   "baseline_strategy": null,
   "thresholds": {},
   "reference_time": null,
-  "knowledge_save_interval": 20,
+  "knowledge_save_interval": 500,
   "async_drain_timeout": 0,
   "llm": {
     "provider": "openai",

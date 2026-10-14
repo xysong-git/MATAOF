@@ -16,8 +16,8 @@ from mataof.report import batch_summary, format_batch_summary, percentile_neares
 
 
 def _trace(qid, status="success", lat=None, baseline_lat=None, assessment=None,
-           ts=None):
-    return {
+           ts=None, overhead=None):
+    t = {
         "query_id": qid,
         "execution": {
             "execution_status": status,
@@ -31,6 +31,9 @@ def _trace(qid, status="success", lat=None, baseline_lat=None, assessment=None,
             "performance_assessment": assessment or "insufficient_evidence",
         },
     }
+    if overhead is not None:
+        t["overhead"] = overhead
+    return t
 
 
 def test_percentile_nearest_rank():
@@ -81,10 +84,51 @@ def test_batch_summary_small_sample_no_fabrication():
     assert l["avg_ms"] == 10.0
 
 
+def test_batch_summary_overhead_and_e2e():
+    # D8：决策开销 = 各阶段成本归因（每条平均，不出分位数）；
+    # 端到端 = 进入→结果（延迟口径）；净开销 = 端到端 avg − baseline 执行 avg；
+    # 不按执行状态过滤（失败/超时同样有优化开销），无 overhead 节的旧 trace 跳过
+    traces = [
+        _trace("q1", lat=10.0, baseline_lat=8.0, overhead={
+            "analysis_ms": 2.0, "retrieval_ms": 0.5, "decision_ms": 0.3,
+            "execution_stage_ms": 30.0, "monitoring_ms": 0.1,
+            "knowledge_update_ms": 0.1, "pipeline_overhead_ms": 3.0,
+            "end_to_end_ms": 40.0, "llm_backfill_ms": None}),
+        _trace("q2", lat=20.0, baseline_lat=10.0, overhead={
+            "analysis_ms": 1.0, "retrieval_ms": 0.2, "decision_ms": 0.2,
+            "execution_stage_ms": 20.0, "monitoring_ms": 0.1,
+            "knowledge_update_ms": 0.1, "pipeline_overhead_ms": 1.6,
+            "end_to_end_ms": 30.0, "llm_backfill_ms": 500.0}),
+        _trace("q3", status="failed"),   # 旧格式 trace（无 overhead）→ 不计入
+        _trace("q4", status="timeout", overhead={
+            "analysis_ms": 3.0, "retrieval_ms": 0.5, "decision_ms": 0.5,
+            "execution_stage_ms": 40.0, "monitoring_ms": 0.2,
+            "knowledge_update_ms": 0.2, "pipeline_overhead_ms": 4.4,
+            "end_to_end_ms": 50.0, "llm_backfill_ms": None}),
+    ]
+    s = batch_summary(traces, total_time_s=10.0)
+    sc = s["stage_cost_ms"]
+    assert sc["samples"] == 3                       # 失败/超时也有开销
+    assert sc["analysis_ms"] == {"samples": 3, "avg_ms": 2.0}
+    assert sc["retrieval_ms"]["avg_ms"] == 0.4
+    assert sc["decision_ms"]["avg_ms"] == 0.33
+    assert sc["monitoring_ms"]["samples"] == 3
+    assert sc["knowledge_update_ms"]["avg_ms"] == round(0.4 / 3, 2)
+    assert sc["pipeline_total_ms"] == {"samples": 3, "avg_ms": 3.0}
+    assert sc["llm_backfill_ms"] == {"samples": 1, "avg_ms": 500.0}
+    e2e = s["end_to_end_ms"]
+    assert e2e["samples"] == 3 and e2e["avg_ms"] == 40.0
+    assert e2e["min_ms"] == 30.0 and e2e["max_ms"] == 50.0
+    assert s["net_overhead_ms"] == 31.0             # 40 − (8+10)/2
+
+
 def test_batch_summary_empty():
     s = batch_summary([])
     assert s["total_queries"] == 0
     assert s["latency_ms"]["samples"] == 0
+    assert s["stage_cost_ms"] == {"samples": 0}
+    assert s["end_to_end_ms"]["samples"] == 0
+    assert s["net_overhead_ms"] is None
     assert s["execution"]["success_rate"] is None
 
 
@@ -96,10 +140,20 @@ def test_batch_summary_time_from_timestamps():
 
 
 def test_format_batch_summary():
-    s = batch_summary([_trace("q1", lat=10.0, baseline_lat=50.0, assessment="improved"),
+    s = batch_summary([_trace("q1", lat=10.0, baseline_lat=50.0, assessment="improved",
+                              overhead={"analysis_ms": 2.0, "retrieval_ms": 0.5,
+                                        "decision_ms": 0.3, "execution_stage_ms": 30.0,
+                                        "monitoring_ms": 0.1, "knowledge_update_ms": 0.1,
+                                        "pipeline_overhead_ms": 3.0,
+                                        "end_to_end_ms": 40.0,
+                                        "llm_backfill_ms": None}),
                        _trace("q2", lat=20.0, assessment="improved")],
                       total_time_s=2.0)
     text = format_batch_summary(s)
     assert "执行汇总" in text
     assert "P50" in text and "P95" in text and "P99" in text
     assert "吞吐" in text and "成功率" in text and "baseline" in text
+    assert "决策开销·各阶段" in text
+    assert "分析" in text and "检索" in text and "决策" in text
+    assert "端到端（进入→结果" in text
+    assert "净开销" in text

@@ -6,6 +6,10 @@
 统计口径（全部可验证）：
 - 延迟统计：本批次 execution_status=success 且 response_time_ms 有效的样本；
   样本不足 2 条时百分位如实置 null；
+- 决策开销（D8）：trace["overhead"] 各阶段成本（分析/检索/决策/监控/入库）按
+  "每条平均" 归因（成本口径，不出分位数）；端到端（进入→结果）为延迟口径
+  （avg/min/max/P50/P95/P99）；不按执行状态过滤——失败/超时同样有优化开销；
+- 净开销：端到端每条平均 − baseline 执行每条平均（判断优化系统是否值得）；
 - 吞吐量：查询总数 / 批次墙钟时间（查询/秒）；
 - 执行成功率：success / 总数（failed/timeout/unknown 分别计数）；
 - 效果分布：improved/unchanged/degraded/failed/insufficient_evidence 计数；
@@ -62,6 +66,21 @@ def resource_stats(samples: list) -> dict:
 _latency_stats = latency_stats
 
 
+def cost_stats(samples: list) -> dict:
+    """对一组阶段成本样本（毫秒）做每条平均统计（成本归因口径，不出分位数）。"""
+    if not samples:
+        return {"samples": 0, "avg_ms": None}
+    return {"samples": len(samples), "avg_ms": round(sum(samples) / len(samples), 2)}
+
+
+def net_overhead(e2e_samples: list, baseline_samples: list) -> Optional[float]:
+    """净开销 = 端到端每条平均 − baseline 执行每条平均（判断优化系统是否值得）。"""
+    if not e2e_samples or not baseline_samples:
+        return None
+    return round(sum(e2e_samples) / len(e2e_samples)
+                 - sum(baseline_samples) / len(baseline_samples), 2)
+
+
 def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
     """对本批次追踪记录做执行汇总。
 
@@ -76,6 +95,10 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
                           "success_rate": None},
             "latency_ms": _latency_stats([]),
             "baseline_latency_ms": _latency_stats([]),
+            # D8：优化机制各阶段成本 + 端到端（空批次 → 无样本，如实 null）
+            "stage_cost_ms": {"samples": 0},
+            "end_to_end_ms": _latency_stats([]),
+            "net_overhead_ms": None,
             "assessment_distribution": {},
         }
 
@@ -83,6 +106,10 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
     status_counts = {"success": 0, "failed": 0, "timeout": 0, "unknown": 0}
     latency_samples: list = []
     baseline_samples: list = []
+    e2e_samples: list = []
+    stage_samples: dict = {k: [] for k in (
+        "analysis_ms", "retrieval_ms", "decision_ms", "monitoring_ms",
+        "knowledge_update_ms", "pipeline_overhead_ms", "llm_backfill_ms")}
     assessments: dict = {}
     cpu_samples: list = []
     cpu_peak_samples: list = []
@@ -108,6 +135,15 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
         b_lat = bl.get("response_time_ms")
         if isinstance(b_lat, (int, float)) and not isinstance(b_lat, bool):
             baseline_samples.append(float(b_lat))
+        # D8：各阶段成本/端到端（runner 墙钟；不按执行状态过滤——失败/超时也有开销）
+        ov = t.get("overhead") or {}
+        for key in stage_samples:
+            v = ov.get(key)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                stage_samples[key].append(float(v))
+        v = ov.get("end_to_end_ms")
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            e2e_samples.append(float(v))
         a = mon.get("performance_assessment") or "insufficient_evidence"
         assessments[a] = assessments.get(a, 0) + 1
 
@@ -134,6 +170,19 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
         },
         "latency_ms": _latency_stats(latency_samples),
         "baseline_latency_ms": _latency_stats(baseline_samples),
+        # D8：优化机制各阶段成本（每条平均，成本归因）与端到端
+        "stage_cost_ms": {
+            "samples": len(stage_samples["pipeline_overhead_ms"]),
+            "analysis_ms": cost_stats(stage_samples["analysis_ms"]),
+            "retrieval_ms": cost_stats(stage_samples["retrieval_ms"]),
+            "decision_ms": cost_stats(stage_samples["decision_ms"]),
+            "monitoring_ms": cost_stats(stage_samples["monitoring_ms"]),
+            "knowledge_update_ms": cost_stats(stage_samples["knowledge_update_ms"]),
+            "pipeline_total_ms": cost_stats(stage_samples["pipeline_overhead_ms"]),
+            "llm_backfill_ms": cost_stats(stage_samples["llm_backfill_ms"]),
+        },
+        "end_to_end_ms": _latency_stats(e2e_samples),
+        "net_overhead_ms": net_overhead(e2e_samples, baseline_samples),
         "resource_utilization": {   # 开题报告 3.5：平均与峰值口径
             "cpu": resource_stats(cpu_samples),
             "cpu_peak": resource_stats(cpu_peak_samples),
@@ -169,6 +218,34 @@ def format_batch_summary(s: dict, title: str = "执行汇总（本批次）") ->
             f"baseline 延迟（样本 {bl['samples']}）: avg {bl['avg_ms']}ms | "
             f"P50 {bl['p50_ms']}ms | P95 {bl['p95_ms']}ms | P99 {bl['p99_ms']}ms"
         )
+    # D8：优化机制各阶段成本（每条平均，成本归因）+ 端到端 + 净开销
+    sc = s.get("stage_cost_ms") or {}
+    if sc.get("samples"):
+        parts = []
+        for key, label in (("analysis_ms", "分析"), ("retrieval_ms", "检索"),
+                           ("decision_ms", "决策"), ("monitoring_ms", "监控"),
+                           ("knowledge_update_ms", "入库")):
+            st = sc.get(key) or {}
+            if st.get("avg_ms") is not None:
+                parts.append(f"{label} {st['avg_ms']}ms")
+        tot = sc.get("pipeline_total_ms") or {}
+        if tot.get("avg_ms") is not None:
+            parts.append(f"合计 {tot['avg_ms']}ms")
+        lines.append(f"决策开销·各阶段（每条平均，样本 {sc['samples']}）: "
+                     + " | ".join(parts))
+        lb = sc.get("llm_backfill_ms") or {}
+        if lb.get("samples"):
+            lines.append(f"LLM 推理·异步补写（每条平均，样本 {lb['samples']}）: "
+                         f"{lb['avg_ms']}ms（不计入端到端）")
+    e2e = s.get("end_to_end_ms") or {}
+    if e2e.get("samples"):
+        lines.append(
+            f"端到端（进入→结果，样本 {e2e['samples']}）: avg {e2e['avg_ms']}ms | "
+            f"min {e2e['min_ms']}ms | max {e2e['max_ms']}ms | "
+            f"P50 {e2e['p50_ms']}ms | P95 {e2e['p95_ms']}ms | P99 {e2e['p99_ms']}ms")
+    if s.get("net_overhead_ms") is not None:
+        lines.append(f"净开销（端到端 avg − baseline 执行 avg）: "
+                     f"{s['net_overhead_ms']}ms/条")
     res = s.get("resource_utilization") or {}
     cpu, cpu_peak = res.get("cpu") or {}, res.get("cpu_peak") or {}
     mem, mem_peak = res.get("memory") or {}, res.get("memory_peak") or {}
