@@ -61,33 +61,6 @@ def _is_failure(record: dict) -> bool:
     return False
 
 
-def _query_condition_summary(records: list) -> str:
-    """匹配记录中该策略的查询条件摘要（出现最多的查询类型与时间范围等级）。"""
-    from collections import Counter
-    qtypes = Counter()
-    levels = Counter()
-    for r in records:
-        qf = r.get("query_record", {}).get("query_features") or {}
-        qtypes[qf.get("query_type") or "unknown"] += 1
-        levels[(qf.get("time") or {}).get("range_level") or "unknown"] += 1
-    parts = [qtypes.most_common(1)[0][0] if qtypes else "unknown"]
-    if levels:
-        parts.append(f"时间范围 {levels.most_common(1)[0][0]}")
-    return " · ".join(parts)
-
-
-def _database_state_summary(records: list) -> str:
-    keys: set = set()
-    for r in records:
-        keys.update((r.get("context", {}).get("database_state") or {}).keys())
-    return "、".join(sorted(keys)) if keys else "（无数据库状态记录）"
-
-
-def _strategy_records(matched: list, strategy_id: str) -> list:
-    return [m["record"] for m in matched
-            if (m["record"].get("strategy") or {}).get("strategy_id") == strategy_id]
-
-
 def _finalize_agg(agg: dict) -> tuple:
     """把每策略聚合结果定稿为 (successful_strategies, failed_strategies,
     strategy_statistics)——与优化前逐字段一致（等价性由测试保证）。"""
@@ -167,13 +140,41 @@ def _agg_rows(store) -> list:
 
 
 def _aggregate_rows(rows: list, order, overall, q_s, db_s, sy_s,
-                    records: list, top_k) -> tuple:
-    """向量化快路径（优化）：投影行 + 降序索引单遍聚合 + 只物化 top-K。
+                    records: list, top_k, aggregate: bool = True) -> tuple:
+    """向量化路径（优化）：投影行 + 降序索引单遍聚合 + 只物化 top-K。
 
-    语义与 _aggregate_matches 完全一致（等价性由 tests/test_knowledge_memory_agent.py
-    保证）：相同分层计数、相同聚合统计、相同 top-K 条目与顺序。
+    aggregate=True（展示/API 默认）：分层计数 + 每策略聚合统计 + top-K 物化，
+    语义与 _aggregate_matches 完全一致（等价性由测试保证）。
+    aggregate=False（决策路径，runner 使用）：分层计数直接用 numpy 计算，
+    只物化 top-K——O(1) 条目的 Python 循环，检索成本与库大小近乎解耦
+    （historical_summary 置空，summary_skipped=True；决策消费的
+    matched_records / matched_records_for_decision / match_counts /
+    strategy_evaluations 与完整路径逐字段一致）。
     """
     from collections import Counter
+
+    if not aggregate:
+        import numpy as np
+        n_strong = int(np.count_nonzero(overall >= 0.8))
+        n_moderate = int(np.count_nonzero(overall >= 0.5)) - n_strong
+        n_weak = int(np.count_nonzero(overall >= 0.3)) - n_strong - n_moderate
+        matched_top: list[dict] = []
+        for idx in order:
+            ov = float(overall[idx])
+            if ov < WEAK_MATCH_THRESHOLD:
+                break   # 降序：后续均低于阈值
+            if top_k is not None and len(matched_top) >= top_k:
+                break
+            matched_top.append({
+                "record": records[idx],
+                "level": match_level(ov),
+                "query": round(float(q_s[idx]), 4),
+                "database": round(float(db_s[idx]), 4),
+                "system": round(float(sy_s[idx]), 4),
+                "overall": round(ov, 4),
+            })
+        return (matched_top, n_strong, n_moderate, n_weak, [], [], {})
+
     matched_top: list[dict] = []
     n_strong = n_moderate = n_weak = 0
     agg: dict[str, dict] = {}
@@ -226,13 +227,15 @@ def _aggregate_rows(rows: list, order, overall, q_s, db_s, sy_s,
     return (matched_top, n_strong, n_moderate, n_weak, successful, failed, stats)
 
 
-def _aggregate_matches(items, top_k):
+def _aggregate_matches(items, top_k, aggregate: bool = True):
     """单遍融合（优化：聚合 + 分层计数 + top-K 物化一次完成）。
 
     items ：按相似度降序（同分按 record_id 升序）的可迭代对象，元素为
             (record, overall, query, database, system)；query/database/system
             仅在物化 top-K 条目时取用（可传原始 numpy 值，物化时统一取整）。
     top_k ：物化条目上限（None → 全部物化）。
+    aggregate=False（决策路径）：跳过每策略聚合（historical_summary 置空），
+    其余输出与完整路径逐字段一致。
     返回 ：(matched_top, n_strong, n_moderate, n_weak, successful_strategies,
            failed_strategies, strategy_statistics)——与优化前逐字段一致
            （等价性由 tests/test_knowledge_memory_agent.py 保证）。
@@ -252,6 +255,18 @@ def _aggregate_matches(items, top_k):
             n_moderate += 1
         else:
             n_weak += 1
+        # top-K 物化（仅前 K 条；其余匹配记录不构建临时条目）
+        if top_k is None or len(matched_top) < top_k:
+            matched_top.append({
+                "record": rec,
+                "level": level,
+                "query": round(float(q), 4),
+                "database": round(float(db), 4),
+                "system": round(float(sy), 4),
+                "overall": round(float(ov), 4),
+            })
+        if not aggregate:
+            continue   # 决策路径：跳过每策略聚合（summary 只用于展示/报告）
         sid = (rec.get("strategy") or {}).get("strategy_id") or "unknown"
         a = agg.get(sid)
         if a is None:   # 两步创建：避免 setdefault 每条记录都构造默认值（含 3 个 Counter）
@@ -279,16 +294,6 @@ def _aggregate_matches(items, top_k):
         a["qtypes"][qf.get("query_type") or "unknown"] += 1
         a["levels"][(qf.get("time") or {}).get("range_level") or "unknown"] += 1
         a["db_keys"].update((rec.get("context") or {}).get("database_state") or {})
-        # top-K 物化（仅前 K 条；其余匹配记录不构建临时条目）
-        if top_k is None or len(matched_top) < top_k:
-            matched_top.append({
-                "record": rec,
-                "level": level,
-                "query": round(float(q), 4),
-                "database": round(float(db), 4),
-                "system": round(float(sy), 4),
-                "overall": round(float(ov), 4),
-            })
 
     # ---- 成功/失败模式提取与策略统计（共享定稿逻辑，与优化前逐字段一致）----
     successful_strategies, failed_strategies, strategy_statistics = _finalize_agg(agg)
@@ -299,7 +304,8 @@ def _aggregate_matches(items, top_k):
 def retrieve(store, query_analysis: dict, database_state: Optional[dict],
              system_state: Optional[dict], query_id: str = "",
              max_records: Optional[int] = None,
-             timing_out: Optional[dict] = None) -> dict:
+             timing_out: Optional[dict] = None,
+             summary: bool = True) -> dict:
     """检索与当前查询上下文相关的历史知识。
 
     store          ：MemoryStore
@@ -311,6 +317,12 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
                      截断只影响 matched_records / matched_records_for_decision 列表。
     timing_out     ：可选 dict——传入时填充细粒度计时（perf_counter 墙钟，逐阶段
                      定位耗时环节）。返回值保持确定性（计时不进输出）。
+    summary        ：False = 决策路径——跳过全匹配集的每策略聚合
+                     （historical_summary 置空、summary_skipped=True）；分层计数
+                     用 numpy 直接计算、只物化 top-K，检索成本与库大小近乎解耦。
+                     决策消费的 matched_records / matched_records_for_decision /
+                     match_counts / strategy_evaluations 与完整路径逐字段一致
+                     （等价性由测试保证）。
     """
     from mataof.similarity import compact_features
 
@@ -343,12 +355,14 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
             t_argsort = perf_counter()
 
             # 投影行快路径：聚合字段一次性提取（惰性增量缓存），单遍完成
-            # 分层计数 + 策略聚合 + top-K 物化（与逐条路径语义一致）
-            rows = _agg_rows(store)
+            # 分层计数 + 策略聚合 + top-K 物化（与逐条路径语义一致）；
+            # summary=False（决策路径）：跳过聚合，numpy 计数 + 只物化 top-K
+            rows = _agg_rows(store) if summary else None
             (matched_top, n_strong, n_moderate, n_weak,
              successful_strategies, failed_strategies,
              strategy_statistics) = _aggregate_rows(
-                 rows, order, overall, q_s, db_s, sy_s, mat["records"], top_k)
+                 rows, order, overall, q_s, db_s, sy_s, mat["records"], top_k,
+                 aggregate=summary)
             vectorized = (n_strong + n_moderate + n_weak) > 0
             t_match_loop = perf_counter()
     except ImportError:
@@ -365,6 +379,7 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
                 continue
             matched_plain.append({"record": record, "level": level, **sims})
         t_scan = perf_counter()
+        t_argsort = t_scan    # 逐条路径无 argsort（小库/无 numpy/空库）
         matched_plain.sort(key=lambda m: (-m["overall"], m["record"]["record_id"]))
         t_sort = perf_counter()
         (matched_top, n_strong, n_moderate, n_weak,
@@ -372,7 +387,7 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
          strategy_statistics) = _aggregate_matches(
             ((m["record"], m["overall"], m["query"], m["database"], m["system"])
              for m in matched_plain),
-            top_k)
+            top_k, aggregate=summary)
         t_match_loop = perf_counter()
     else:
         t_sort = t_match_loop   # 向量化路径跳过冗余排序（argsort 已保序）
@@ -467,4 +482,5 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
         "match_counts": {"strong": n_strong, "moderate": n_moderate, "weak": n_weak},  # 扩展
         "truncated": truncated,                                  # 扩展：top-K 截断说明（未截断为 null）
         "strategy_evaluations": evaluations,                     # 扩展：策略评价表（D1 动态权重）
+        "summary_skipped": not summary,                          # 扩展：决策路径跳过展示聚合
     }

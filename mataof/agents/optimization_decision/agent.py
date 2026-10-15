@@ -45,6 +45,7 @@ from mataof.agents.optimization_decision.confidence import (
 )
 from mataof.agents.optimization_decision.llm_enhance import (
     build_llm_analysis,
+    request_llm_decision,
     request_preferences,
 )
 
@@ -69,12 +70,18 @@ class OptimizationDecisionAgent:
     description = "综合查询特征、数据库状态、系统状态与历史经验，在候选策略空间中"
     description += "选择当前查询的优化策略，并给出可追踪的依据与置信度。"
 
-    def decide(self, decision_input: dict, llm: Optional[object] = None) -> dict:
+    def decide(self, decision_input: dict, llm: Optional[object] = None,
+               llm_decide: bool = False) -> dict:
         """决策入口。llm：可选 LLMClient（混合增强模式）。
 
         - llm=None / 调用失败 → 确定性决策完全不变（兜底）；
         - 开启 decision_input["llm_preference_bonus"] 时，LLM 第一偏好 +0.05 分
-          （实验性，不参与风险门控）。
+          （实验性，不参与风险门控）；
+        - llm_decide=True（decision_mode="llm_primary"）：LLM 为每个适用维度
+          从候选中选择策略，**只做合法性校验**（候选 ∩ 目录、维度适用、需求
+          满足；equivalent_sql 一律取自候选提供方，LLM 不生成 SQL）；
+          LLM 失败/非法 → 该维度保持确定性决策（兜底）。evidence/置信度
+          始终来自确定性链路，LLM 不给证据（防编造）。
         """
         output = optimization_decision_output_template()
 
@@ -139,22 +146,64 @@ class OptimizationDecisionAgent:
                     "equivalent_sql": chosen.equivalent_sql,
                 }
 
+        # ---- LLM 参与决策（llm_decide：LLM 选择 + 合法性校验；确定性为兜底）----
+        llm_chosen: dict = {}
+        if llm_decide and llm is not None:
+            applicable = {dim: results[dim].applicable for dim in DIMENSIONS}
+            req_met = {
+                dim: {e.name: e.requirements_met for e in results[dim].evaluations}
+                for dim in DIMENSIONS
+            }
+            llm_res = request_llm_decision(llm, decision_input, ctx.candidates,
+                                           applicable, req_met, ctx.notes)
+            for dim, name in llm_res.get("decisions", {}).items():
+                cand = next((c for c in ctx.candidates.get(dim, [])
+                             if (c["name"] if isinstance(c, dict) else c) == name),
+                            None)
+                if cand is None:
+                    continue   # 候选条目缺失（理论不可达：校验已保证在候选内）
+                if isinstance(cand, dict):
+                    llm_chosen[dim] = {
+                        "name": name,
+                        "reason": (llm_res.get("reasons") or {}).get(dim),
+                        "equivalent_sql": cand.get("equivalent_sql"),
+                        "parameters": cand.get("parameters"),
+                    }
+                else:
+                    llm_chosen[dim] = {"name": name, "reason": None,
+                                       "equivalent_sql": None, "parameters": None}
+            if llm_chosen:
+                ctx.notes.append("llm_selected: " + ",".join(sorted(llm_chosen)))
+
+        # ---- 决策条目：LLM 覆盖（理由标注 llm_selected，置信度保持确定性值）----
+        for dim, ov in llm_chosen.items():
+            reason = (ov.get("reason") or "").strip() or "LLM 依据当前上下文选择该策略"
+            output["decision"][dim] = {
+                "strategy": ov["name"],
+                "reason": f"{reason}（llm_selected；当前信息条件下的选择）",
+                "confidence": output["decision"][dim]["confidence"],
+                "equivalent_sql": ov.get("equivalent_sql"),
+            }
+
         # ---- selected_strategy 与 fallback_strategy ----
         parts, params = [], {}
         fallback_parts = []
         for dim in DIMENSIONS:
             r = results[dim]
-            if not r.applicable:
+            if dim in llm_chosen:
+                parts.append(f"{dim}={llm_chosen[dim]['name']}")
+            elif not r.applicable:
                 parts.append(f"{dim}={NOT_APPLICABLE}")
             elif r.is_fallback:
                 parts.append(f"{dim}={r.fallback_strategy}")
                 fallback_parts.append(f"{dim}={r.fallback_strategy}")
             else:
                 parts.append(f"{dim}={r.chosen.name}")
-        params = _strategy_parameters(results, ctx)
+        params = _strategy_parameters(results, ctx, llm_chosen)
         output["selected_strategy"]["strategy_id"] = "|".join(parts)
         output["selected_strategy"]["strategy_parameters"] = params
-        output["selected_strategy"]["equivalent_sql"] = _compose_equivalent_sql(ctx, results)
+        output["selected_strategy"]["equivalent_sql"] = _compose_equivalent_sql(
+            ctx, results, llm_chosen)
         output["fallback_strategy"] = "|".join(fallback_parts)
 
         # ---- evidence ----
@@ -164,8 +213,15 @@ class OptimizationDecisionAgent:
         output["overall_confidence"] = overall_confidence(
             results, ctx, dim_conf, len(ev.used)
         )
-        n_fallback = sum(1 for r in results.values() if r.applicable and r.is_fallback)
-        n_applicable = sum(1 for r in results.values() if r.applicable)
+        n_fallback = n_applicable = 0
+        for dim in DIMENSIONS:
+            r = results[dim]
+            if dim in llm_chosen:
+                n_applicable += 1            # LLM 选择的维度视为已决策（不属回退）
+            elif r.applicable:
+                n_applicable += 1
+                if r.is_fallback:
+                    n_fallback += 1
         if n_fallback == 0:
             output["decision_status"] = "success"
         elif n_fallback >= n_applicable:
@@ -187,8 +243,9 @@ class OptimizationDecisionAgent:
         output["notes"] = notes
 
         # ---- LLM 语义增强（只进 llm_analysis 节；失败不影响确定性决策）----
-        output["llm_analysis"] = build_llm_analysis(llm, decision_input, output,
-                                                    ctx.candidates)
+        # llm_decide 模式下跳过解读调用（LLM 仅用于决策本身，每条查询 1 次调用）
+        output["llm_analysis"] = build_llm_analysis(
+            None if llm_decide else llm, decision_input, output, ctx.candidates)
         return output
 
 
@@ -236,11 +293,24 @@ def _selection_reason(dim: str, r: DimensionResult, ctx: DecisionContext) -> str
     return "；".join(parts)
 
 
-def _strategy_parameters(results: dict, ctx: DecisionContext) -> dict:
-    """传递给执行层的参数：只包含事实性取值 + 候选提供的执行级参数。"""
+def _strategy_parameters(results: dict, ctx: DecisionContext,
+                         llm_chosen: Optional[dict] = None) -> dict:
+    """传递给执行层的参数：只包含事实性取值 + 候选提供的执行级参数。
+
+    llm_chosen：LLM 选择的维度覆盖（{dim: {name, parameters, ...}}）。
+    """
+    llm_chosen = llm_chosen or {}
     params: dict = {}
     r = results["time_pruning"]
-    if r.applicable and not r.is_fallback and r.chosen.name in (
+    ov_tp = llm_chosen.get("time_pruning")
+    if ov_tp is not None:
+        if ov_tp["name"] in ("partition_pruning", "chunk_level_filtering"):
+            t = ctx.features.get("time") or {}
+            params["time_pruning"] = {
+                "start_time": t.get("start_time"),
+                "end_time": t.get("end_time"),
+            }
+    elif r.applicable and not r.is_fallback and r.chosen.name in (
         "partition_pruning", "chunk_level_filtering",
     ):
         t = ctx.features.get("time") or {}
@@ -251,14 +321,21 @@ def _strategy_parameters(results: dict, ctx: DecisionContext) -> dict:
     # 候选携带的执行级参数（候选提供方给出，原样透传）
     for dim in DIMENSIONS:
         r = results[dim]
-        if r.applicable and not r.is_fallback and r.chosen.parameters:
+        ov = llm_chosen.get(dim)
+        if ov is not None:
+            if ov.get("parameters"):
+                entry = dict(params.get(dim) or {})
+                entry.update(ov["parameters"])
+                params[dim] = entry
+        elif r.applicable and not r.is_fallback and r.chosen.parameters:
             entry = dict(params.get(dim) or {})
             entry.update(r.chosen.parameters)
             params[dim] = entry
     return params
 
 
-def _compose_equivalent_sql(ctx: DecisionContext, results: dict) -> Optional[str]:
+def _compose_equivalent_sql(ctx: DecisionContext, results: dict,
+                            llm_chosen: Optional[dict] = None) -> Optional[str]:
     """组合可直接执行的等价 SQL（混合模型）。
 
     组合规则（保守、确定性）：
@@ -266,9 +343,16 @@ def _compose_equivalent_sql(ctx: DecisionContext, results: dict) -> Optional[str
     - 恰好 1 个维度提供 → 该 SQL（候选按维度独立生成，典型为 Filter Order 重排）；
     - ≥2 个维度提供 → null（无法可靠组合独立生成的 SQL），执行层按 strategy_id
       与各维度参数执行，绝不输出可能错误的 SQL。
+    llm_chosen：LLM 选择的维度（SQL 同样取自候选提供方字段）。
     """
+    llm_chosen = llm_chosen or {}
     sqls = []
     for dim in DIMENSIONS:
+        ov = llm_chosen.get(dim)
+        if ov is not None:
+            if ov.get("equivalent_sql"):
+                sqls.append((dim, ov["equivalent_sql"]))
+            continue
         r = results[dim]
         if r.applicable and not r.is_fallback and r.chosen.equivalent_sql:
             sqls.append((dim, r.chosen.equivalent_sql))
@@ -361,6 +445,11 @@ def _collect_evidence(ctx: DecisionContext, ev, results: dict) -> dict:
 default_agent = OptimizationDecisionAgent()
 
 
-def decide(decision_input: dict, llm: Optional[object] = None) -> dict:
-    """Optimization Decision Agent 的便捷入口。llm 为可选 LLMClient（混合增强）。"""
-    return default_agent.decide(decision_input, llm=llm)
+def decide(decision_input: dict, llm: Optional[object] = None,
+           llm_decide: bool = False) -> dict:
+    """Optimization Decision Agent 的便捷入口。
+
+    llm 为可选 LLMClient（混合增强）；llm_decide=True 时 LLM 参与策略选择
+    （合法性校验 + 确定性兜底，见 OptimizationDecisionAgent.decide）。
+    """
+    return default_agent.decide(decision_input, llm=llm, llm_decide=llm_decide)

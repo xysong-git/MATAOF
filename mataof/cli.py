@@ -127,6 +127,9 @@ def _cmd_run(args) -> int:
         print(f"[runner] 异步 LLM 增强：{pending} 个补写任务未完成（未等待；"
               f"对应查询的 llm_analysis 保持未完成语义，确定性产物不受影响。"
               f"如需完整补写，配置 async_drain_timeout 为等待秒数）", file=sys.stderr)
+    # 关闭后台线程池（不等待）：ThreadPoolExecutor 的 atexit 钩子会在进程退出时
+    # join 未完成任务——大轮次下未完成补写可积压数小时，导致汇总打印后进程"卡住"
+    runner.stop_llm_executor()
     # batch 行已按文件/位置参数分组追加（不再重复追加整轮行）
     for trace in traces:
         mon = trace["monitoring"]

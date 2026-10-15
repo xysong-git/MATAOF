@@ -62,10 +62,6 @@ def resource_stats(samples: list) -> dict:
             "max": round(max(samples), 4)}
 
 
-# 兼容别名（历史引用）
-_latency_stats = latency_stats
-
-
 def cost_stats(samples: list) -> dict:
     """对一组阶段成本样本（毫秒）做每条平均统计（成本归因口径，不出分位数）。"""
     if not samples:
@@ -93,11 +89,11 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
             "total_queries": 0, "total_time_s": None, "throughput_qps": None,
             "execution": {"success": 0, "failed": 0, "timeout": 0, "unknown": 0,
                           "success_rate": None},
-            "latency_ms": _latency_stats([]),
-            "baseline_latency_ms": _latency_stats([]),
+            "latency_ms": latency_stats([]),
+            "baseline_latency_ms": latency_stats([]),
             # D8：优化机制各阶段成本 + 端到端（空批次 → 无样本，如实 null）
             "stage_cost_ms": {"samples": 0},
-            "end_to_end_ms": _latency_stats([]),
+            "end_to_end_ms": latency_stats([]),
             "net_overhead_ms": None,
             "assessment_distribution": {},
         }
@@ -168,8 +164,8 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
             "unknown": status_counts.get("unknown", 0),
             "success_rate": round(success / total, 4),
         },
-        "latency_ms": _latency_stats(latency_samples),
-        "baseline_latency_ms": _latency_stats(baseline_samples),
+        "latency_ms": latency_stats(latency_samples),
+        "baseline_latency_ms": latency_stats(baseline_samples),
         # D8：优化机制各阶段成本（每条平均，成本归因）与端到端
         "stage_cost_ms": {
             "samples": len(stage_samples["pipeline_overhead_ms"]),
@@ -181,7 +177,7 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
             "pipeline_total_ms": cost_stats(stage_samples["pipeline_overhead_ms"]),
             "llm_backfill_ms": cost_stats(stage_samples["llm_backfill_ms"]),
         },
-        "end_to_end_ms": _latency_stats(e2e_samples),
+        "end_to_end_ms": latency_stats(e2e_samples),
         "net_overhead_ms": net_overhead(e2e_samples, baseline_samples),
         "resource_utilization": {   # 开题报告 3.5：平均与峰值口径
             "cpu": resource_stats(cpu_samples),

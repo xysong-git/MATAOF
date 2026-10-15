@@ -25,12 +25,18 @@ mataof run --config config.dbs.json \
 
 | 配置文件 | 规模 | 知识库 | 追踪输出目录 |
 |---|---|---|---|
-| `config.dbs.json` | small（root.dbs.g_0） | `data/knowledge_dbs.db` | `results/round_dbs/` |
-| `config.dbm.json` | medium（root.dbm.g_0） | `data/knowledge_dbm.db` | `results/round_dbm/` |
-| `config.dbl.json` | large（root.dbl.g_0） | `data/knowledge_dbl.db` | `results/round_dbl/` |
+| `config.dbs.json` | small（root.dbs.g_0） | `data/knowledge.db`（三规模共享） | `results/round_dbs/` |
+| `config.dbm.json` | medium（root.dbm.g_0） | `data/knowledge.db`（三规模共享） | `results/round_dbm/` |
+| `config.dbl.json` | large（root.dbl.g_0） | `data/knowledge.db`（三规模共享） | `results/round_dbl/` |
 
 三个配置均启用真实 IoTDB 执行与 **baseline 实测**（每条查询执行两次：原查询 +
 策略查询）。`database_state.data_scale_level` 用于历史相似度区分规模。
+
+**统一知识库（设计更新）**：跨规模共享——dbs/dbm/dbl 共用
+`data/knowledge.db`，不同数据集的执行经验互相迁移（相似度模型按
+data_scale_level 区分规模，跨规模记录仍参与证据）；跨模式隔离——
+fixed 用 `data/knowledge_fixed.db`、llm 用 `data/knowledge_llm.db`，
+固定策略的执行记录不污染 agent/llm 的历史证据（对照实验公平）。
 
 **知识库持久化层**（D8b 第五步实测选定）：`"knowledge_backend": "sqlite"`——
 增量 INSERT 持久化（51k 库写入 12.7ms/条 vs 整库 JSON 快照 3687ms/条，291×；
@@ -76,12 +82,14 @@ full_scan / time_first / final_level_aggregation），跳过决策 Agent 与历�
 - 同步 LLM 模式（`async_enhance: false`，需逐条 LLM 参与决策的实验）：
   workers=4 实测提速 1.75×（重叠 LLM 网络等待），此时并行才有效。
 
-**知识库规模与每轮实验**：知识库 append-only 累积，检索成本随库大小线性增长。
-已实现 **numpy 向量化相似度扫描** + **融合单遍聚合**（D8b：51k 库单条检索
-447~779ms → **86ms**，12.8×；1k 库 4ms）：扫描/聚合不再是大库瓶颈；
-**写入已切换 SQLite 增量持久化**（整库 JSON 快照 3687ms/条 → 12.7ms/条）。
-同质查询集下证据很快饱和——**正式实验仍建议每轮使用独立知识库路径**
-（改配置 `knowledge_store`，或每轮后归档）；需要跨轮累积时再共享同一路径。
+**知识库规模与每轮实验**：知识库 append-only 累积（统一库：跨规模共享，
+持续学习），检索成本随库大小线性增长。已实现 **numpy 向量化相似度扫描** +
+**融合单遍聚合**（D8b：51k 库单条检索 447~779ms → **86ms**，12.8×；1k 库 4ms）
++ **决策路径解耦**（D8c：runner 走 `summary=False`——跳过全匹配集展示聚合，
+分层计数 numpy 直接算、只物化 top-K，48k 库检索 **7.6ms**，随库增长只余
+O(N) 扫描 ~5ms/5 万条，近乎解耦）；写入已切换 SQLite 增量持久化
+（整库 JSON 快照 3687ms/条 → 12.7ms/条）。CLI `mataof retrieve` 等展示
+场景仍走完整聚合路径（historical_summary 完整）。
 
 **CLI 的 --file 支持多文件与通配符**：`mataof run --file query/queries_dbs/q*.sql ...`
 （shell 展开为多文件，全部按 --file 处理，每文件分别采样）；若位置参数是文件路径
@@ -90,12 +98,17 @@ full_scan / time_first / final_level_aggregation），跳过决策 Agent 与历�
 各模式配置：`config.{scale}.json`（agent）/ `config.{scale}.llm.json`（llm，本地
 Qwen3-8B + enable_thinking=false + **async_enhance 异步增强 + LLM 输出缓存**）。
 
-LLM 模式说明（B4/B3 已默认启用）：
-- 主链路为确定性快路径（LLM 解读由后台线程补写进 trace，批次结束自动排空）；
-- 第二轮起同查询集命中 LLM 缓存（`data/llm_cache_*.json`），LLM 开销趋零；
-- 需要 LLM 同步参与决策（实验性偏好加分）时：设 `"preference_bonus": true`，
-  系统自动回退同步模式（async 失效并提示）；
-- 消融实验对比 LLM 影响时，清空 `data/llm_cache_*.json` 保证公平。
+LLM 模式说明（decision_mode="llm_primary"，D9 设计更新）：
+- **LLM 参与策略选择**：每条查询同步调用 LLM 决策（特征化量化 prompt：连续值
+  分桶 → 16500 条抽样仅 69 个唯一 prompt，`data/llm_cache_*.json` 输出缓存
+  高命中 → 全量实验可行；每条查询恰好 1 次 LLM 调用，QA/监控解读关闭）；
+- LLM 只做合法性校验（候选 ∩ 目录、维度适用、需求满足；equivalent_sql 取自
+  候选提供方）；LLM 失败/非法 → 确定性决策兜底（reason 标注 llm_selected）；
+- 决策输入含**经验摘要**（评价表按查询类型过滤 + 分桶量化）——已学到的知识
+  喂给 LLM，学习闭环与 LLM 决策打通；
+- 消融/对照实验时清空 `data/llm_cache_*.json` 保证公平（首轮冷调用有界：
+  69 个唯一 prompt × 经验分桶状态数）；
+- 唯一数验证脚本：`scripts/bench_decision_cache.py`。
 每轮结束自动输出汇总报告（**与每批次汇总的指标/排版完全一致**，便于逐批次 vs 总体对比）：
 - agent/fixed/llm：`scripts/aggregate_agent.py --run-id <轮次ID>`（合并各规模
   run_log.jsonl，**按轮次过滤**——每轮脚本自动生成统一 run_id，历史批次不混入；
@@ -240,7 +253,7 @@ nohup bash scripts/run_experiment.sh --mode agent \
 - `knowledge_conf`：检索到的历史知识量（越跑越高）；
 - 个别失败不会中断整轮（逐条独立），失败原因会如实记录。
 
-## 4. 产出与解读
+## 04. 产出与解读
 
 每次运行 `mataof run` 产生以下产物（**每次运行都是新文件，绝不覆盖历史结果**）：
 

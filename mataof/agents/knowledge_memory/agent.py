@@ -76,15 +76,19 @@ class KnowledgeMemoryAgent:
     def retrieve(self, query_analysis: dict, database_state: Optional[dict] = None,
                  system_state: Optional[dict] = None, query_id: str = "",
                  llm_summary: bool = True,
-                 max_records: Optional[int] = None) -> dict:
+                 max_records: Optional[int] = None,
+                 summary: bool = True) -> dict:
         """检索与当前查询上下文相关的历史知识（三层匹配 + 汇总 + 模式）。
 
         llm_summary=False 时跳过 LLM 解读（如 runner 链路：决策只消费结构化记录，
         每条查询省一次 LLM 调用）；无匹配记录时同样跳过（无内容可解读）。
         max_records 为返回记录上限（top-K；None 不截断，API 默认）。
+        summary=False 为决策路径（runner 使用）：跳过全匹配集聚合
+        （historical_summary 置空、summary_skipped=True），检索成本与库大小
+        近乎解耦；决策消费字段与完整路径逐字段一致（等价性由测试保证）。
         """
         result = _retrieve(self.store, query_analysis, database_state, system_state,
-                           query_id, max_records=max_records)
+                           query_id, max_records=max_records, summary=summary)
         if not llm_summary:
             result["llm_analysis"] = {
                 "available": False, "semantic_summary": None,

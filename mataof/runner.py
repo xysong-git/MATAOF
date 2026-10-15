@@ -99,6 +99,72 @@ class RunnerConfig:
     async_drain_timeout: float = 0.0            # B4：异步补写排空超时（0=不等待；>0 最多等 N 秒）
 
 
+class _BackfillFuture:
+    """简化 Future：Event 通知 + result(timeout)/done（与 wait_llm_tasks 兼容）。"""
+
+    def __init__(self):
+        self._done = threading.Event()
+        self._result = None
+        self._exc = None
+
+    def _set_result(self, r):
+        self._result = r
+        self._done.set()
+
+    def _set_exception(self, e):
+        self._exc = e
+        self._done.set()
+
+    def done(self) -> bool:
+        return self._done.is_set()
+
+    def result(self, timeout=None):
+        if not self._done.wait(timeout):
+            raise TimeoutError
+        if self._exc is not None:
+            raise self._exc
+        return self._result
+
+
+class _DaemonBackfillPool:
+    """daemon 线程工作池：进程退出立即终止，不被未完成补写阻塞。
+
+    ThreadPoolExecutor 的 worker 线程非 daemon：解释器退出时
+    threading._shutdown 会先 join 全部非 daemon 线程（早于任何 atexit 钩子），
+    大轮次下积压数小时的补写会让进程在汇总打印后"卡住"，cancel_futures 也
+    无法生效。本池用 daemon 线程：退出即弃，未完成补写保持"未完成"语义
+    （llm_analysis 不入库、确定性产物不受影响；重跑同查询集可命中 LLM 缓存）。
+    """
+
+    def __init__(self, workers: int, prefix: str = "llm-backfill"):
+        import queue
+        self._q: queue.Queue = queue.Queue()
+        self._threads = [
+            threading.Thread(target=self._work, name=f"{prefix}-{i}", daemon=True)
+            for i in range(workers)]
+        for t in self._threads:
+            t.start()
+
+    def _work(self) -> None:
+        while True:
+            item = self._q.get()
+            if item is None:
+                return
+            fn, fut = item
+            try:
+                fut._set_result(fn())
+            except Exception as exc:   # 后台失败绝不拖垮主链路
+                fut._set_exception(exc)
+
+    def submit(self, fn):
+        fut = _BackfillFuture()
+        self._q.put((fn, fut))
+        return fut
+
+    def shutdown(self, wait: bool = False, cancel_futures: bool = False) -> None:
+        pass   # daemon 线程退出即终止（接口与 ThreadPoolExecutor 对齐）
+
+
 class PipelineRunner:
     """正式运行入口：四 Agent 闭环 + 执行层对接 + 追踪落盘。
 
@@ -136,6 +202,19 @@ class PipelineRunner:
             self._llm_async = False
             print("[runner] 注意: preference_bonus 开启，async_enhance 强制回退为同步模式",
                   flush=True)
+        # LLM 参与决策（decision_mode="llm_primary"）：每条查询都要等 LLM 决策，
+        # 必须同步且不可采样（缓存承担同质查询的加速）
+        self._llm_decide = bool((config.llm or {}).get("decision_mode") == "llm_primary") \
+            and self.llm is not None
+        if self._llm_decide:
+            if self._llm_async:
+                self._llm_async = False
+                print("[runner] 注意: decision_mode=llm_primary 开启，LLM 参与决策必须"
+                      "同步，async_enhance 强制回退为同步模式", flush=True)
+            if self._llm_every > 1:
+                self._llm_every = 1
+                print("[runner] 注意: decision_mode=llm_primary 下 sample_rate 强制为 1"
+                      "（每条查询都需 LLM 决策；同质查询命中输出缓存）", flush=True)
         self._llm_workers = max(1, int((config.llm or {}).get("async_workers") or 2))
         self._llm_executor = None
         self._llm_futures: list = []
@@ -181,9 +260,12 @@ class PipelineRunner:
             query_id = f"{self.run_id}-{seq:04d}"
 
         llm = self._llm_for_query()   # 采样控制；未采样 → 确定性快路径
+        # 决策模式：LLM 只用于决策（QA 解读/监控解读关闭——每条查询恰好 1 次 LLM
+        # 调用 + 输出缓存）；其余模式 llm 照常用于解读增强
+        llm_qa = None if self._llm_decide else llm
 
         # 1. 分析（LLM 增强可选；不可用自动回退确定性路径）
-        analysis = analyze(query, query_id=query_id, llm=llm)
+        analysis = analyze(query, query_id=query_id, llm=llm_qa)
         t_analysis = time.perf_counter()
         # 2. 知识检索（历史证据；runner 链路关闭检索解读 LLM——决策只消费结构化记录）
         #    fixed 模式（Baseline 2）不使用历史，跳过检索
@@ -197,6 +279,7 @@ class PipelineRunner:
                 system_state=self.config.system_state, query_id=query_id,
                 llm_summary=False,
                 max_records=self.config.knowledge_max_records,
+                summary=False,   # 决策路径：跳过展示聚合（成本与库大小解耦）
             )
         t_retrieval = time.perf_counter()
         # 3. 决策（LLM 增强可选；bonus 开关来自配置 llm 节）
@@ -218,7 +301,7 @@ class PipelineRunner:
         if self.config.fixed_strategy:
             decision = self._fixed_decision(analysis, query_id)
         else:
-            decision = decide(decision_input, llm=llm)
+            decision = decide(decision_input, llm=llm, llm_decide=self._llm_decide)
         t_decision = time.perf_counter()
         # 4. 执行（真实执行层；NullExecutor 时不产生任何指标）
         execution: ExecutionResult = self.executor.execute(
@@ -238,8 +321,9 @@ class PipelineRunner:
         feedback = monitor(monitoring_input, llm=None)
         t_monitoring = time.perf_counter()
         # B1：合并 LLM 调用（监控解读 + KM 经验总结一次完成，4→3 次/条）
+        # 决策模式下关闭（LLM 仅用于决策，每条查询恰好 1 次调用 + 输出缓存）
         experience_note: Optional[str] = None
-        if llm is not None:
+        if llm_qa is not None:
             from mataof.agents.execution_monitoring.llm_enhance import (
                 build_post_execution_llm,
             )
@@ -324,11 +408,11 @@ class PipelineRunner:
     def _enqueue_llm_backfill(self, trace: dict, query: str,
                               decision_input: dict, monitoring_input: dict) -> None:
         if self._llm_executor is None:
-            from concurrent.futures import ThreadPoolExecutor
-            self._llm_executor = ThreadPoolExecutor(
-                max_workers=self._llm_workers, thread_name_prefix="llm-backfill")
+            self._llm_executor = _DaemonBackfillPool(
+                self._llm_workers, prefix="llm-backfill")
         fut = self._llm_executor.submit(
-            self._backfill_llm, trace, query, decision_input, monitoring_input)
+            lambda: self._backfill_llm(trace, query, decision_input,
+                                       monitoring_input))
         with self._llm_futures_lock:
             self._llm_futures.append(fut)
 
@@ -381,14 +465,20 @@ class PipelineRunner:
             self._rewrite_trace_file(trace)
 
     def _rewrite_trace_file(self, trace: dict) -> None:
-        """回写原 trace 文件（异步补写结果；路径来自 _write_trace 的记录）。"""
+        """回写原 trace 文件（异步补写结果；路径来自 _write_trace 的记录）。
+
+        原子写（tmp + os.replace）：进程退出时若补写被中止（stop_llm_executor），
+        不会留下半写的损坏文件——中止前的内容保持完整。
+        """
         with self._seq_lock:
             path = self._trace_paths.get(trace["query_id"])
         if not path:
             return
         try:
-            with open(path, "w", encoding="utf-8") as f:
+            tmp = f"{path}.tmp.{os.getpid()}.{threading.get_ident()}"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(trace, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
         except OSError:
             pass
 
@@ -423,6 +513,19 @@ class PipelineRunner:
         with self._llm_futures_lock:
             self._llm_futures = [f for f in self._llm_futures if not f.done()]
         return sum(1 for f in futures if not f.done())
+
+    def stop_llm_executor(self) -> None:
+        """停用后台补写线程池：未完成补写即弃（daemon 线程，退出即终止）。
+
+        补写池为 daemon 线程（_DaemonBackfillPool）：进程退出时
+        threading._shutdown 不 join 它们，任何退出路径（正常/异常/Ctrl+C）
+        都不会被积压补写阻塞。未完成补写按设计保持"未完成"语义
+        （llm_analysis 不入库、确定性产物不受影响；重跑同查询集可命中
+        LLM 缓存补齐）。本方法供 CLI 在汇总前显式调用；进程退出无需依赖它。
+        """
+        if self._llm_executor is not None:
+            self._llm_executor.shutdown(wait=False, cancel_futures=True)
+            self._llm_executor = None
 
     # ------------------------------------------------------------------
     # 批量运行
