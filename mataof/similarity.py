@@ -239,25 +239,26 @@ def _valid_record(record: dict) -> bool:
 class HistoryEvidence:
     """历史证据集合：相似度达标的记录 + 按维度/策略聚合的统计。"""
 
-    used: list = field(default_factory=list)   # [{"record_id", "similarity", "weight", "record"}]
+    used: list = field(default_factory=list)   # [{"record_id", "similarity", "weight", "count", "record"}]
     below_threshold: int = 0
     invalid: int = 0
 
     def count_for(self, dim: str, strategy: str) -> int:
         return sum(
-            1 for u in self.used
+            u["count"] for u in self.used
             if u["record"]["strategy"].get(dim) == strategy
         )
 
     def weight_for(self, dim: str, strategy: str) -> float:
         w = sum(
-            u["weight"] for u in self.used
+            u["weight"] * u["count"] for u in self.used
             if u["record"]["strategy"].get(dim) == strategy
         )
         return min(1.0, w)
 
     def weighted_latency(self, dim: str, strategy: str) -> Optional[float]:
-        items = [(u["weight"], u["record"]["execution_feedback"]["latency_ms"])
+        items = [(u["weight"] * u["count"],
+                  u["record"]["execution_feedback"]["latency_ms"])
                  for u in self.used if u["record"]["strategy"].get(dim) == strategy]
         if not items:
             return None
@@ -266,7 +267,8 @@ class HistoryEvidence:
 
     def total_weight(self, dim: str) -> float:
         return min(1.0, sum(
-            u["weight"] for u in self.used if u["record"]["strategy"].get(dim) is not None
+            u["weight"] * u["count"] for u in self.used
+            if u["record"]["strategy"].get(dim) is not None
         ))
 
     def best_latency(self, dim: str) -> Optional[float]:
@@ -302,6 +304,7 @@ def build_history_evidence(records: list, current_compact: dict, current_db: dic
             "record_id": rec["record_id"],
             "similarity": round(sim, 4),
             "weight": round(sim * _decay(rec, reference_time), 4),
+            "count": int(rec.get("count") or 1),   # 签名聚合条目 = 覆盖执行数
             "record": rec,
         })
     return ev
@@ -410,17 +413,21 @@ def build_vector_matrix(store) -> Optional[dict]:
     db_codes 三列：scale_level 码、scale_level 存在位、device_scale 值(NaN=缺失)
     """
     np = _np()
-    records = store.all()
-    n = len(records)
+    # 缓存命中检查用 O(1) 计数：避免每条查询复制全量记录列表（大库 ~2-4ms/条）。
+    # 签名聚合存储（v2）的矩阵行 = 唯一签名 → 用 signature_count；其余用 count。
+    mat = getattr(store, "_vec_mat", None)
+    sig_counter = getattr(store, "signature_count", None)
+    n = sig_counter() if sig_counter is not None else store.count()
     if n == 0:
         return None
-
-    # 增量：已缓存的矩阵只追加新记录行
-    mat = getattr(store, "_vec_mat", None)
     if mat is not None and mat.get("_len") == n:
         return mat
-
     start = mat["_len"] if mat is not None else 0
+    # 增量重建只取新增条目（签名存储下每次新增都触发重建——
+    # 全量合成记录构建是 O(N) 且昂贵，必须只取增量）
+    records = store.all(start=start) if start else store.all()
+    if mat is not None:
+        mat["records"].extend(records)   # 原地扩展，保留旧引用（不再整表替换）
     # code_maps：7 个查询类别字段 + db 的 scale_level + sys 的 load_level 共 9 张
     code_maps = mat["code_maps"] if mat is not None else [{} for _ in range(len(_CAT_FIELDS) + 2)]
     next_code = [max((max(m.values(), default=-1) + 1) for m in code_maps)]
@@ -428,7 +435,7 @@ def build_vector_matrix(store) -> Optional[dict]:
     old_func_len = len(func_dict)
 
     new_cats, new_nums, new_funcs = [], [], []
-    for rec in records[start:]:
+    for rec in records:   # records 在增量时为"仅新增"切片
         parts = _record_parts(rec)
         c, v, fs = encode_vector_row(parts, code_maps, next_code, func_dict)
         new_cats.append(c)
@@ -436,12 +443,18 @@ def build_vector_matrix(store) -> Optional[dict]:
         new_funcs.append(fs)
 
     n_new = n - start
+    # totals：每行覆盖的执行数（签名聚合条目 → execution_count；逐条记录 → 1）
+    # 供检索分层计数按执行数加权（knowledge_confidence / match_executions）
+    new_totals = np.fromiter(
+        (int(r.get("execution_count") or 1) for r in records),
+        np.int64, n_new) if n_new else np.empty(0, np.int64)
     if mat is None:
         cat_codes = np.stack(new_cats) if new_cats else np.empty((0, len(_CAT_FIELDS)), np.int16)
         num_values = np.stack(new_nums) if new_nums else np.empty((0, len(_NUM_FIELDS)), np.float32)
         db_codes = np.zeros((n, 3), np.float32)
         sys_codes = np.zeros((n, 1), np.int16)
         func_mat = np.zeros((n, max(len(func_dict), 1)), np.uint8)
+        totals = new_totals if n_new else np.empty(0, np.int64)
     else:
         cat_codes = np.vstack([mat["cat_codes"], np.stack(new_cats)]) if new_cats else mat["cat_codes"]
         num_values = np.vstack([mat["num_values"], np.stack(new_nums)]) if new_nums else mat["num_values"]
@@ -449,6 +462,8 @@ def build_vector_matrix(store) -> Optional[dict]:
                     if n_new else mat["db_codes"])
         sys_codes = (np.vstack([mat["sys_codes"], np.zeros((n_new, 1), np.int16)])
                      if n_new else mat["sys_codes"])
+        totals = (np.concatenate([mat["totals"], new_totals])
+                  if n_new else mat["totals"])
         # 函数矩阵：先给旧行补齐新增字典列，再拼接新行（vstack 要求宽度一致）
         func_mat = mat["func_mat"]
         if len(func_dict) > func_mat.shape[1]:
@@ -462,7 +477,7 @@ def build_vector_matrix(store) -> Optional[dict]:
         for fn in fs:
             func_mat[row_idx, func_dict.index(fn)] = 1
     # db/sys 列：为新行填充
-    for j, rec in enumerate(records[start:]):
+    for j, rec in enumerate(records):
         db = (rec.get("context") or {}).get("database_state") or {}
         sy = (rec.get("context") or {}).get("system_state") or {}
         row_idx = start + j
@@ -474,9 +489,9 @@ def build_vector_matrix(store) -> Optional[dict]:
         ll = sy.get("load_level")
         sys_codes[row_idx, 0] = _code_of(ll, code_maps[len(_CAT_FIELDS) + 1], next_code)
 
-    mat = {
+    mat_new = {
         "_len": n,
-        "records": records,
+        "records": mat["records"] if mat is not None else records,
         "cat_codes": cat_codes,
         "num_values": num_values,
         "func_mat": func_mat,
@@ -484,9 +499,10 @@ def build_vector_matrix(store) -> Optional[dict]:
         "code_maps": code_maps,
         "db_codes": db_codes,
         "sys_codes": sys_codes,
+        "totals": totals,
     }
-    store._vec_mat = mat
-    return mat
+    store._vec_mat = mat_new
+    return mat_new
 
 
 def encode_current_query(current_compact: dict, current_db: dict, current_sys: dict,
@@ -533,11 +549,16 @@ def vectorized_similarities(current_compact: dict, current_db: dict, current_sys
     n = mat["cat_codes"].shape[0]
     q = np.zeros(n, np.float32)
 
-    for i, (_field, w) in enumerate(_CAT_FIELDS):
-        c = int(cur_c[i])
-        col = mat["cat_codes"][:, i].astype(np.float32)
-        q += w * np.where((col < 0) | (c < 0), 0.5, (col == c).astype(np.float32))
+    # ---- 类别字段（融合：整矩阵广播比较 + 权重 matmul，替代逐字段多次遍历）----
+    cat = mat["cat_codes"].astype(np.float32)              # N×7（一次转换）
+    cur_cf = cur_c.astype(np.float32)                      # 7
+    eq = (cat == cur_cf).astype(np.float32)                # N×7
+    miss = (cat < 0) | (cur_cf < 0)                        # N×7（广播）
+    contrib = np.where(miss, np.float32(0.5), eq)          # 缺失任一方 → 0.5
+    cat_w = np.array([w for _, w in _CAT_FIELDS], np.float32)
+    q += (contrib * cat_w).sum(axis=1)   # 元素级加权求和（避免小 K 矩阵乘的 BLAS 开销）
 
+    # ---- 数值字段（逐字段：规则分支多，融合无收益且 where 链更慢）----
     for i, (_field, w) in enumerate(_NUM_FIELDS):
         V = mat["num_values"][:, i]
         v = float(cur_n[i])

@@ -218,9 +218,11 @@ class MemoryStore:
         with self._lock:
             return self._records.get(record_id)
 
-    def all(self) -> list[dict]:
+    def all(self, start: int = 0) -> list[dict]:
+        """全部记录（start>0 → 只返回第 start 条及之后，增量重建用）。"""
+        from itertools import islice
         with self._lock:
-            return list(self._records.values())
+            return list(islice(self._records.values(), start, None))
 
     def count(self) -> int:
         with self._lock:

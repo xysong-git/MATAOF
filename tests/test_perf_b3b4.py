@@ -186,3 +186,103 @@ def test_wait_llm_tasks_timeout_positive(tmp_path):
     runner.run_statements([NARROW_Q] * 3, source="t.sql", drain_llm=False)
     pending = runner.wait_llm_tasks(timeout_s=5.0)    # 足够全部完成
     assert pending == 0
+
+
+def test_stop_llm_executor_abandons_pending(tmp_path):
+    """进程退出不被未完成补写阻塞：stop 后线程池关闭、pending 被放弃。
+
+    确定性产物（已落盘的 trace 主体）不受影响；未完成补写保持未完成语义。
+    """
+    llm = SlowLLM()
+    runner = _runner(tmp_path, llm)
+    traces = runner.run_statements([NARROW_Q] * 3, source="t.sql",
+                                   drain_llm=False)
+    runner.stop_llm_executor()                        # 立即返回，不等待
+    assert runner._llm_executor is None
+    # 已落盘 trace 文件仍完整可读（原子回写不产生半写文件）
+    for t in traces:
+        path = runner._trace_paths[t["query_id"]]
+        with open(path, encoding="utf-8") as f:
+            saved = json.loads(f.read())
+        assert saved["query_id"] == t["query_id"]
+
+
+def test_decision_mode_llm_primary_wiring(tmp_path, monkeypatch):
+    """decision_mode="llm_primary"：强制同步 + sample_rate 强制 1 + 每条查询
+    恰好 1 次 LLM 调用（决策）；QA 解读关闭；决策带 llm_selected 标注。"""
+    import mataof.runner as runner_mod
+
+    class DecideLLM:
+        name = "fake"
+        model = "fake"
+
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, max_tokens=2048, timeout_s=60.0):
+            self.calls += 1
+            return json.dumps({"decisions": {
+                "time_pruning": "full_scan", "filter_order": None,
+                "aggregation_placement": None},
+                "reasons": {"time_pruning": "保守选择全表扫描"}}, ensure_ascii=False)
+
+    fake = DecideLLM()
+    monkeypatch.setattr(runner_mod, "build_llm_client", lambda cfg: fake)
+    runner = PipelineRunner(RunnerConfig(
+        results_dir=str(tmp_path),
+        llm={"provider": "none", "decision_mode": "llm_primary",
+             "async_enhance": True, "sample_rate": 10},
+        run_id="dm",
+    ))
+    assert runner._llm_decide is True
+    assert runner._llm_async is False          # 决策必须同步：强制回退
+    assert runner._llm_every == 1              # 采样强制 1（每条都要决策）
+
+    trace = runner.run_query(NARROW_Q, query_id="dm1")
+    assert fake.calls == 1                     # 每条查询恰好 1 次（决策）
+    assert trace["decision"]["decision"]["time_pruning"]["strategy"] == "full_scan"
+    assert "llm_selected" in trace["decision"]["decision"]["time_pruning"]["reason"]
+    assert any("llm_selected" in n for n in trace["decision"]["notes"])
+    assert trace["analysis"]["llm_analysis"]["available"] is False   # QA 解读关闭
+
+
+def test_process_exits_despite_llm_backlog(tmp_path):
+    """回归（子进程实测）：大量未完成补写积压时进程能及时退出。
+
+    背景：ThreadPoolExecutor 的 atexit 钩子会 join 全部 worker——若排队任务
+    未被取消，积压数小时的补写会让进程在汇总打印后"卡住"。此处积压 ≈7s，
+    断言子进程 4s 内退出（无修复时需 ~7s+ 排空）。
+    """
+    import subprocess
+    script = """
+import json
+import time
+from mataof.runner import PipelineRunner, RunnerConfig
+
+NARROW_Q = ("SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 "
+            "AND time <= 1640970000000")
+
+class SlowLLM:
+    name = "fake"
+    model = "fake"
+    def chat(self, messages, max_tokens=2048, timeout_s=60.0):
+        time.sleep(0.8)          # 单条补写 ≈ 3×0.8s；6 条积压 ≈ 7.2s
+        return "{{}}"
+
+runner = PipelineRunner(RunnerConfig(
+    results_dir={results!r},
+    llm={{"provider": "none", "async_enhance": True, "async_workers": 2}},
+    run_id="exit-test",
+))
+runner.llm = SlowLLM()
+runner._llm_async = True
+runner.run_statements([NARROW_Q] * 6, source="t.sql", drain_llm=False)
+# 不调用 stop：退出路径由 atexit 兜底（模拟 Ctrl+C/正常退出）
+""".format(results=str(tmp_path / "results"))
+    t0 = time.time()
+    r = subprocess.run([sys.executable, "-c", script], capture_output=True,
+                       text=True, timeout=30, cwd=os.path.dirname(
+                           os.path.dirname(os.path.abspath(__file__))))
+    elapsed = time.time() - t0
+    assert r.returncode == 0, r.stderr
+    assert elapsed < 4.0, f"进程退出耗时 {elapsed:.1f}s：排队补写未被取消"

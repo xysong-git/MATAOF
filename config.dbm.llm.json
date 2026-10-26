@@ -1,5 +1,5 @@
 {
-  "knowledge_store": "data/knowledge_dbm_llm.db",
+  "knowledge_store": "data/knowledge_llm.db",
   "knowledge_backend": "sqlite",
   "results_dir": "results/round_dbm_llm",
   "executor": {
@@ -35,8 +35,9 @@
       }
     },
     "preference_bonus": false,
-    "sample_rate": 10,
-    "async_enhance": true,
+    "decision_mode": "llm_primary",
+    "sample_rate": 1,
+    "async_enhance": false,
     "async_workers": 2,
     "cache_file": "data/llm_cache_dbm.json"
   }

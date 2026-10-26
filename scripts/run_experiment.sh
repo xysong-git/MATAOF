@@ -96,6 +96,8 @@ total_files=${#file_list[@]}
 if [[ "$MODE" == "native" ]]; then
   # native：逐文件客户端直发原始 SQL（与 agent 模式同一客户端/同一计时代码，
   # 采样与 agent 共用 sample_items——同种子同抽样，口径一致）
+  # 每轮开始前清理旧 .jsonl：防其他规模/历史轮的残留文件被汇总重复计数
+  rm -f "$ROOT"/results_baseline/*.jsonl
   file_no=0
   for f in "${file_list[@]}"; do
     name=$(basename "$f" .sql)

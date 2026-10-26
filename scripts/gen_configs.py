@@ -30,6 +30,8 @@ EXECUTOR = {
 }
 
 # LLM 共享片段（OpenAI 兼容协议接本地 vLLM Qwen3-8B）
+# decision_mode="llm_primary"：LLM 参与策略选择（特征化 prompt + 输出缓存 +
+# 合法性校验，确定性为兜底）——每条查询恰好 1 次 LLM 调用，同质查询命中缓存。
 def llm_section(scale: str) -> dict:
     return {
         "provider": "openai",
@@ -41,8 +43,9 @@ def llm_section(scale: str) -> dict:
         "log_file": "data/llm_log.jsonl",
         "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
         "preference_bonus": False,
-        "sample_rate": 10,
-        "async_enhance": True,
+        "decision_mode": "llm_primary",
+        "sample_rate": 1,
+        "async_enhance": False,
         "async_workers": 2,
         "cache_file": f"data/llm_cache_{scale}.json",
     }
@@ -57,9 +60,13 @@ FIXED_STRATEGY = {
 
 def base_config(scale: str, mode: str) -> dict:
     # 持久化层（D8b 第五步实测结论）：sqlite 增量 INSERT——写入 291× 于整库 JSON
-    # 快照；加载 2s/51k（一次性）；事务崩溃安全。知识库路径用 .db 扩展名。
+    # 快照；加载 2s/51k（一次性）；事务崩溃安全。
+    # 统一知识库（设计更新）：跨规模共享（dbs/dbm/dbl 共用同一库——不同数据集的
+    # 经验互相迁移，无需每个数据集重新学习）；跨模式隔离（fixed/agent/llm 各自
+    # 独立——固定策略执行记录不污染 agent/llm 的历史证据，对照实验保持公平）。
+    kb = {"base": "knowledge", "llm": "knowledge_llm", "fixed": "knowledge_fixed"}[mode]
     cfg = {
-        "knowledge_store": f"data/knowledge_{mode_prefix(scale, mode)}.db",
+        "knowledge_store": f"data/{kb}.db",
         "knowledge_backend": "sqlite",
         "results_dir": f"results/round_{mode_prefix(scale, mode)}",
         "executor": dict(EXECUTOR),

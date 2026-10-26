@@ -78,7 +78,13 @@ def test_retrieval_equivalence_with_memory_store(tmp_path, backend):
                                 max_records=10)
         r_new = km_backend.retrieve(an, database_state=db_state, query_id=qid,
                                     max_records=10)
-        assert r_new == r_ref
+        # 签名聚合存储（sqlite）vs 逐条存储（json）的**不变量**逐字段一致：
+        # 策略统计（按执行数加权，精确一致）、执行数分层计数、评价表
+        assert r_new["historical_summary"]["strategy_statistics"] == \
+            r_ref["historical_summary"]["strategy_statistics"]
+        assert r_new["match_executions"] == r_ref["match_executions"]
+        assert r_new["strategy_evaluations"] == r_ref["strategy_evaluations"]
+        assert r_new["knowledge_confidence"] == r_ref["knowledge_confidence"]
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -147,6 +153,8 @@ def test_runner_config_wires_backend(tmp_path):
         elif backend == "sqlite":
             import sqlite3
             conn = sqlite3.connect(kb_path)
-            n = conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+            n = conn.execute("SELECT COUNT(*) FROM executions").fetchone()[0]
+            nsig = conn.execute("SELECT COUNT(*) FROM signatures").fetchone()[0]
             conn.close()
             assert n == 1
+            assert nsig == 1

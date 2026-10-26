@@ -539,3 +539,24 @@ def test_retrieve_timing_out_diagnostic():
     assert "timing_ms" not in r2
     for key in ("matrix_ms", "scan_ms", "argsort_ms", "match_loop_ms", "total_ms"):
         assert key in timing and timing[key] >= 0
+
+
+def test_retrieve_summary_false_decision_fields_identical():
+    """决策路径（summary=False）与完整路径的**决策消费字段**逐字段一致。"""
+    km = KnowledgeMemoryAgent()
+    _seed_mixed(km, n_dup=3)
+    an = analyze(NARROW_Q, query_id="s")
+    db_state = {"device_scale": 1000, "data_scale_level": "small"}
+    r_full = km.retrieve(an, database_state=db_state, query_id="s", max_records=5)
+    r_fast = km.retrieve(an, database_state=db_state, query_id="s", max_records=5,
+                         summary=False)
+    for key in ("matched_records", "matched_records_for_decision", "match_counts",
+                "knowledge_confidence", "truncated", "strategy_evaluations"):
+        assert r_fast[key] == r_full[key], f"决策字段不一致: {key}"
+    assert r_fast["summary_skipped"] is True
+    assert r_full["summary_skipped"] is False
+    # 展示聚合：快路径置空，完整路径有内容
+    assert r_fast["historical_summary"] == {"successful_strategies": [],
+                                            "failed_strategies": [],
+                                            "strategy_statistics": {}}
+    assert r_full["historical_summary"]["strategy_statistics"]

@@ -38,11 +38,13 @@ data_scale_level 区分规模，跨规模记录仍参与证据）；跨模式隔
 fixed 用 `data/knowledge_fixed.db`、llm 用 `data/knowledge_llm.db`，
 固定策略的执行记录不污染 agent/llm 的历史证据（对照实验公平）。
 
-**知识库持久化层**（D8b 第五步实测选定）：`"knowledge_backend": "sqlite"`——
-增量 INSERT 持久化（51k 库写入 12.7ms/条 vs 整库 JSON 快照 3687ms/条，291×；
-事务崩溃安全）。可选值：`json`（整库快照，旧行为）/ `jsonl`（追加式）/ `sqlite`。
-三者同协议、同检索语义（等价性由 `tests/test_knowledge_backends.py` 保证）。
-基准脚本：`scripts/bench_kb.py --kb <全量库> --backends json,jsonl,sqlite`。
+**知识库持久化层**（D8b/D10 实测选定）：`"knowledge_backend": "sqlite"`，
+**签名聚合布局（v2）**——executions（append-only 逐条执行日志）+
+signatures（静态特征/策略/上下文按内容哈希去重）+ meta。收益（118k 执行实测）：
+同质经验归并（24,625 个签名，4.8×）、库文件 140→57.8MB、冷加载 0.9s、
+检索扫描 O(唯一签名) ~4.5ms；证据与统计按执行数加权（与逐条口径精确一致）。
+可选值：`json` / `jsonl`（逐条存储，旧行为）/ `sqlite`（v2 签名聚合）。
+v1 格式库首次加载自动迁移。基准脚本：`scripts/bench_kb.py`。
 
 ## 1.1 四种运行模式（统一脚本切换）
 

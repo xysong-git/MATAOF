@@ -61,6 +61,47 @@ def _is_failure(record: dict) -> bool:
     return False
 
 
+def _counts_of(rec: dict) -> tuple:
+    """记录的执行计数分布（兼容两种形态）。
+
+    签名合成记录（execution_count 扩展字段）→ 聚合分布；
+    原始逐条记录（json/jsonl 后端）→ (1, 逐条事实)。
+    返回 (total, improved, failure, failed_timeout, degraded, critical_counts)。
+    """
+    n = rec.get("execution_count")
+    if isinstance(n, int) and n > 0:
+        return (n, rec.get("improved_count") or 0, rec.get("failure_count") or 0,
+                rec.get("failed_timeout_count") or 0,
+                rec.get("degraded_count") or 0,
+                dict(rec.get("critical_counts") or {}))
+    improved = 1 if rec.get("execution_result") == "improved" else 0
+    failure = 1 if _is_failure(rec) else 0
+    ft = 1 if failure and (rec.get("execution") or {}).get("status") in (
+        "failed", "timeout") else 0
+    dg = 1 if rec.get("execution_result") == "degraded" else 0
+    crit: dict = {}
+    if failure:
+        for an in rec.get("anomalies") or []:
+            if an.get("severity") == "critical":
+                t = an.get("type") or "anomaly"
+                crit[t] = crit.get(t, 0) + 1
+    return (1, improved, failure, ft, dg, crit)
+
+
+def _latency_tuple_of(rec: dict) -> Optional[tuple]:
+    """记录的延迟元组 (sum, count, min, max)——签名记录用聚合值。"""
+    if isinstance(rec.get("execution_count"), int) and rec.get("execution_count", 0) > 0:
+        n = rec["execution_count"]
+        avg = rec.get("latency_avg_ms")
+        if avg is None or n == 0:
+            return None
+        return (float(avg) * n, n, rec.get("latency_min_ms"), rec.get("latency_max_ms"))
+    lat = _latency_of(rec)
+    if lat is None:
+        return None
+    return (lat, 1, lat, lat)
+
+
 def _finalize_agg(agg: dict) -> tuple:
     """把每策略聚合结果定稿为 (successful_strategies, failed_strategies,
     strategy_statistics)——与优化前逐字段一致（等价性由测试保证）。"""
@@ -71,13 +112,14 @@ def _finalize_agg(agg: dict) -> tuple:
         a = agg[sid]
         total = a["total"]
         ratio = round(a["success"] / total, 4) if total else 0.0
-        lats = a["lats"]
+        lat_sum, lat_count = a["lat_sum"], a["lat_count"]
         strategy_statistics[sid] = {
             "total": total,
             "success": a["success"],
             "failure": a["failure"],
             "success_ratio": ratio,
-            "avg_latency_ms": round(sum(lats) / len(lats), 2) if lats else None,
+            "avg_latency_ms": round(lat_sum / lat_count, 2)
+                              if lat_count else None,
         }
         if total >= MIN_PATTERN_COUNT and ratio >= MIN_SUCCESS_RATIO:
             qs = a["qtypes"].most_common(1)[0][0] if a["qtypes"] else "unknown"
@@ -88,9 +130,10 @@ def _finalize_agg(agg: dict) -> tuple:
                 "database_state_summary": "、".join(sorted(a["db_keys"]))
                                           if a["db_keys"] else "（无数据库状态记录）",
                 "performance": {
-                    "avg_latency_ms": round(sum(lats) / len(lats), 2) if lats else None,
-                    "min_latency_ms": min(lats) if lats else None,
-                    "max_latency_ms": max(lats) if lats else None,
+                    "avg_latency_ms": round(lat_sum / lat_count, 2)
+                                      if lat_count else None,
+                    "min_latency_ms": a["lat_min"],
+                    "max_latency_ms": a["lat_max"],
                 },
                 "count": total,
                 "success_ratio": ratio,
@@ -109,47 +152,41 @@ def _agg_rows(store) -> list:
     """按记录顺序的轻量投影行（惰性构建 + 增量追加；与向量矩阵记录顺序对齐）。
 
     每条记录一次性提取聚合所需字段（消除重复模式提取）：(strategy_id,
-    execution_result, exec_status, critical_types, latency, query_type,
-    range_level, db_keys)。记录 append-only 不可变 → 缓存始终有效。
+    qtype, range_level, db_keys, 执行计数分布, 延迟元组)。
+    记录 append-only 不可变 → 缓存始终有效；增量只处理新增条目。
     """
-    records = store.all()
-    n = len(records)
+    sig_counter = getattr(store, "signature_count", None)
+    n = sig_counter() if sig_counter is not None else store.count()
     rows = getattr(store, "_agg_rows", None)
     if rows is not None and rows["_len"] == n:
         return rows["rows"]
     start = rows["_len"] if rows is not None else 0
     out = list(rows["rows"]) if rows is not None else []
-    for rec in records[start:]:
+    records = store.all(start=start) if start else store.all()
+    for rec in records:
         strat = rec.get("strategy") or {}
         sid = strat.get("strategy_id") or "unknown"
-        effect = rec.get("execution_result") or ""
-        status = (rec.get("execution") or {}).get("status")
-        crit = tuple(an.get("type") or "anomaly"
-                     for an in (rec.get("anomalies") or [])
-                     if an.get("severity") == "critical")
-        metrics = (rec.get("execution") or {}).get("metrics") or {}
-        lat = metrics.get("response_time_ms")
-        lat = float(lat) if isinstance(lat, (int, float)) and not isinstance(lat, bool) else None
         qf = (rec.get("query_record") or {}).get("query_features") or {}
         qtype = qf.get("query_type") or "unknown"
         rl = (qf.get("time") or {}).get("range_level") or "unknown"
         dbk = tuple((rec.get("context") or {}).get("database_state") or {})
-        out.append((sid, effect, status, crit, lat, qtype, rl, dbk))
+        out.append((sid, qtype, rl, dbk,
+                    _counts_of(rec), _latency_tuple_of(rec)))
     store._agg_rows = {"_len": n, "rows": out}
     return out
 
 
 def _aggregate_rows(rows: list, order, overall, q_s, db_s, sy_s,
-                    records: list, top_k, aggregate: bool = True) -> tuple:
+                    records: list, top_k, aggregate: bool = True,
+                    totals=None) -> tuple:
     """向量化路径（优化）：投影行 + 降序索引单遍聚合 + 只物化 top-K。
 
-    aggregate=True（展示/API 默认）：分层计数 + 每策略聚合统计 + top-K 物化，
-    语义与 _aggregate_matches 完全一致（等价性由测试保证）。
-    aggregate=False（决策路径，runner 使用）：分层计数直接用 numpy 计算，
-    只物化 top-K——O(1) 条目的 Python 循环，检索成本与库大小近乎解耦
-    （historical_summary 置空，summary_skipped=True；决策消费的
-    matched_records / matched_records_for_decision / match_counts /
-    strategy_evaluations 与完整路径逐字段一致）。
+    aggregate=True（展示/API 默认）：分层计数（签名 + 执行双口径）+ 每策略
+    聚合统计（按 execution_count 加权——与逐条存储精确一致）+ top-K 物化。
+    aggregate=False（决策路径，runner 使用）：分层计数直接用 numpy 计算
+    （totals 加权），只物化 top-K——O(1) 条目的 Python 循环。
+    返回 (matched_top, n_strong, n_moderate, n_weak, w_strong, w_moderate,
+          w_weak, successful_strategies, failed_strategies, strategy_statistics)。
     """
     from collections import Counter
 
@@ -158,6 +195,12 @@ def _aggregate_rows(rows: list, order, overall, q_s, db_s, sy_s,
         n_strong = int(np.count_nonzero(overall >= 0.8))
         n_moderate = int(np.count_nonzero(overall >= 0.5)) - n_strong
         n_weak = int(np.count_nonzero(overall >= 0.3)) - n_strong - n_moderate
+        if totals is None:
+            w_strong = w_moderate = w_weak = 0
+        else:
+            w_strong = int(totals[overall >= 0.8].sum())
+            w_moderate = int(totals[(overall >= 0.5) & (overall < 0.8)].sum())
+            w_weak = int(totals[(overall >= 0.3) & (overall < 0.5)].sum())
         matched_top: list[dict] = []
         for idx in order:
             ov = float(overall[idx])
@@ -173,45 +216,56 @@ def _aggregate_rows(rows: list, order, overall, q_s, db_s, sy_s,
                 "system": round(float(sy_s[idx]), 4),
                 "overall": round(ov, 4),
             })
-        return (matched_top, n_strong, n_moderate, n_weak, [], [], {})
+        return (matched_top, n_strong, n_moderate, n_weak,
+                w_strong, w_moderate, w_weak, [], [], {})
 
     matched_top: list[dict] = []
     n_strong = n_moderate = n_weak = 0
+    w_strong = w_moderate = w_weak = 0
     agg: dict[str, dict] = {}
     for idx in order:
         ov = float(overall[idx])
         level = match_level(ov)
         if level is None:
             break   # 降序：后续均低于阈值
+        sid, qtype, rl, dbk, counts, lat = rows[idx]
+        total, improved, failure, ft, dg, crit = counts
         if level == "strong_match":
             n_strong += 1
+            w_strong += total
         elif level == "moderate_match":
             n_moderate += 1
+            w_moderate += total
         else:
             n_weak += 1
-        sid, effect, status, crit, lat, qtype, rl, dbk = rows[idx]
+            w_weak += total
         a = agg.get(sid)
         if a is None:
             a = agg[sid] = {
-                "total": 0, "success": 0, "failure": 0, "lats": [],
+                "total": 0, "success": 0, "failure": 0,
+                "lat_sum": 0.0, "lat_count": 0,
+                "lat_min": None, "lat_max": None,
                 "qtypes": Counter(), "levels": Counter(), "db_keys": set(),
                 "ftypes": Counter(),
             }
-        a["total"] += 1
-        if effect == "improved":
-            a["success"] += 1
-        if effect in ("degraded", "failed") or status in ("failed", "timeout") or crit:
-            a["failure"] += 1
-            if status in ("failed", "timeout"):
-                a["ftypes"]["execution_failed"] += 1
-            if effect == "degraded":
-                a["ftypes"]["degraded"] += 1
-            for t in crit:
-                a["ftypes"][t] += 1
+        a["total"] += total
+        a["success"] += improved
+        a["failure"] += failure
+        if ft:
+            a["ftypes"]["execution_failed"] += ft
+        if dg:
+            a["ftypes"]["degraded"] += dg
+        for t, c in crit.items():
+            a["ftypes"][t] += c
         if lat is not None:
-            a["lats"].append(lat)
-        a["qtypes"][qtype] += 1
-        a["levels"][rl] += 1
+            a["lat_sum"] += lat[0]
+            a["lat_count"] += lat[1]
+            if lat[2] is not None:
+                a["lat_min"] = lat[2] if a["lat_min"] is None else min(a["lat_min"], lat[2])
+            if lat[3] is not None:
+                a["lat_max"] = lat[3] if a["lat_max"] is None else max(a["lat_max"], lat[3])
+        a["qtypes"][qtype] += total
+        a["levels"][rl] += total
         a["db_keys"].update(dbk)
         # top-K 物化（仅前 K 条；其余匹配记录不构建临时条目）
         if top_k is None or len(matched_top) < top_k:
@@ -224,7 +278,8 @@ def _aggregate_rows(rows: list, order, overall, q_s, db_s, sy_s,
                 "overall": round(ov, 4),
             })
     successful, failed, stats = _finalize_agg(agg)
-    return (matched_top, n_strong, n_moderate, n_weak, successful, failed, stats)
+    return (matched_top, n_strong, n_moderate, n_weak,
+            w_strong, w_moderate, w_weak, successful, failed, stats)
 
 
 def _aggregate_matches(items, top_k, aggregate: bool = True):
@@ -243,18 +298,23 @@ def _aggregate_matches(items, top_k, aggregate: bool = True):
     from collections import Counter
     matched_top: list[dict] = []
     n_strong = n_moderate = n_weak = 0
-    # 每策略聚合：total/success/failure/lats/qtypes/levels/db_keys/ftypes
+    w_strong = w_moderate = w_weak = 0
+    # 每策略聚合：total/success/failure/延迟元组/qtypes/levels/db_keys/ftypes
     agg: dict[str, dict] = {}
     for rec, ov, q, db, sy in items:
         level = match_level(ov)
         if level is None:
             break   # 输入已降序：后续均低于阈值
+        total, improved, failure, ft, dg, crit = _counts_of(rec)
         if level == "strong_match":
             n_strong += 1
+            w_strong += total
         elif level == "moderate_match":
             n_moderate += 1
+            w_moderate += total
         else:
             n_weak += 1
+            w_weak += total
         # top-K 物化（仅前 K 条；其余匹配记录不构建临时条目）
         if top_k is None or len(matched_top) < top_k:
             matched_top.append({
@@ -271,33 +331,38 @@ def _aggregate_matches(items, top_k, aggregate: bool = True):
         a = agg.get(sid)
         if a is None:   # 两步创建：避免 setdefault 每条记录都构造默认值（含 3 个 Counter）
             a = agg[sid] = {
-                "total": 0, "success": 0, "failure": 0, "lats": [],
+                "total": 0, "success": 0, "failure": 0,
+                "lat_sum": 0.0, "lat_count": 0,
+                "lat_min": None, "lat_max": None,
                 "qtypes": Counter(), "levels": Counter(), "db_keys": set(),
                 "ftypes": Counter(),
             }
-        a["total"] += 1
-        if rec.get("execution_result") == "improved":
-            a["success"] += 1
-        if _is_failure(rec):
-            a["failure"] += 1
-            if (rec.get("execution") or {}).get("status") in ("failed", "timeout"):
-                a["ftypes"]["execution_failed"] += 1
-            if rec.get("execution_result") == "degraded":
-                a["ftypes"]["degraded"] += 1
-            for an in rec.get("anomalies") or []:
-                if an.get("severity") == "critical":
-                    a["ftypes"][an.get("type") or "anomaly"] += 1
-        lat = _latency_of(rec)
+        a["total"] += total
+        a["success"] += improved
+        a["failure"] += failure
+        if ft:
+            a["ftypes"]["execution_failed"] += ft
+        if dg:
+            a["ftypes"]["degraded"] += dg
+        for t, c in crit.items():
+            a["ftypes"][t] += c
+        lat = _latency_tuple_of(rec)
         if lat is not None:
-            a["lats"].append(lat)
+            a["lat_sum"] += lat[0]
+            a["lat_count"] += lat[1]
+            if lat[2] is not None:
+                a["lat_min"] = lat[2] if a["lat_min"] is None else min(a["lat_min"], lat[2])
+            if lat[3] is not None:
+                a["lat_max"] = lat[3] if a["lat_max"] is None else max(a["lat_max"], lat[3])
         qf = (rec.get("query_record") or {}).get("query_features") or {}
-        a["qtypes"][qf.get("query_type") or "unknown"] += 1
-        a["levels"][(qf.get("time") or {}).get("range_level") or "unknown"] += 1
+        a["qtypes"][qf.get("query_type") or "unknown"] += total
+        a["levels"][(qf.get("time") or {}).get("range_level") or "unknown"] += total
         a["db_keys"].update((rec.get("context") or {}).get("database_state") or {})
 
-    # ---- 成功/失败模式提取与策略统计（共享定稿逻辑，与优化前逐字段一致）----
+    # ---- 成功/失败模式提取与策略统计（共享定稿逻辑，与逐条口径一致）----
     successful_strategies, failed_strategies, strategy_statistics = _finalize_agg(agg)
     return (matched_top, n_strong, n_moderate, n_weak,
+            w_strong, w_moderate, w_weak,
             successful_strategies, failed_strategies, strategy_statistics)
 
 
@@ -334,6 +399,7 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
 
     matched_top: list[dict] = []
     n_strong = n_moderate = n_weak = 0
+    w_strong = w_moderate = w_weak = 0
     successful_strategies: list[dict] = []
     failed_strategies: list[dict] = []
     strategy_statistics: dict[str, dict] = {}
@@ -355,14 +421,16 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
             t_argsort = perf_counter()
 
             # 投影行快路径：聚合字段一次性提取（惰性增量缓存），单遍完成
-            # 分层计数 + 策略聚合 + top-K 物化（与逐条路径语义一致）；
+            # 分层计数（签名 + 执行双口径）+ 策略聚合（execution_count 加权）
+            # + top-K 物化（与逐条路径语义一致）；
             # summary=False（决策路径）：跳过聚合，numpy 计数 + 只物化 top-K
             rows = _agg_rows(store) if summary else None
             (matched_top, n_strong, n_moderate, n_weak,
+             w_strong, w_moderate, w_weak,
              successful_strategies, failed_strategies,
              strategy_statistics) = _aggregate_rows(
                  rows, order, overall, q_s, db_s, sy_s, mat["records"], top_k,
-                 aggregate=summary)
+                 aggregate=summary, totals=mat.get("totals"))
             vectorized = (n_strong + n_moderate + n_weak) > 0
             t_match_loop = perf_counter()
     except ImportError:
@@ -383,6 +451,7 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
         matched_plain.sort(key=lambda m: (-m["overall"], m["record"]["record_id"]))
         t_sort = perf_counter()
         (matched_top, n_strong, n_moderate, n_weak,
+         w_strong, w_moderate, w_weak,
          successful_strategies, failed_strategies,
          strategy_statistics) = _aggregate_matches(
             ((m["record"], m["overall"], m["query"], m["database"], m["system"])
@@ -404,7 +473,7 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
         rec = m["record"]
         strat = rec.get("strategy") or {}
         metrics = (rec.get("execution") or {}).get("metrics") or {}
-        matched_records.append({
+        entry = {
             "record_id": rec["record_id"],
             "similarity": m["overall"],
             "query_similarity": m["query"],
@@ -418,30 +487,41 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
                 "execution_status": (rec.get("execution") or {}).get("status"),
                 "effect": (rec.get("experience") or {}).get("effect"),
             },
-        })
+        }
+        n_exec = rec.get("execution_count")
+        if isinstance(n_exec, int) and n_exec > 0:
+            # 签名聚合条目（存储 v2）：携带覆盖执行数与聚合统计
+            entry["execution_count"] = n_exec
+            entry["success_ratio"] = rec.get("success_ratio")
+            entry["latency_min_ms"] = rec.get("latency_min_ms")
+            entry["latency_max_ms"] = rec.get("latency_max_ms")
+        matched_records.append(entry)
     t_serialize = perf_counter()
 
-    # ---- 知识置信度：强/中/弱匹配加权，封顶 1.0 ----
-    knowledge_confidence = round(min(1.0, 0.25 * n_strong + 0.15 * n_moderate + 0.05 * n_weak), 2)
+    # ---- 知识置信度：强/中/弱匹配按执行数加权（封顶 1.0；逐条存储时 w==n）----
+    knowledge_confidence = round(min(1.0, 0.25 * w_strong + 0.15 * w_moderate
+                                     + 0.05 * w_weak), 2)
     t_aggregate = perf_counter()   # 聚合已融合进匹配单遍（计时键名保留，便于前后对比）
 
     # ---- 决策 Agent 兼容记录（扩展：可直接作为 historical_records 输入）----
     # 同样按 top-K 截断（决策证据规模有界）；summary 统计不受影响。
-    # 每条携带 similarity（H1：决策端直接复用，不再重算相似度）。
+    # 每条携带 similarity（H1：决策端直接复用，不再重算相似度）；
+    # 签名聚合条目携带 count（覆盖执行数，决策端按 count 加权）。
     records_for_decision: list[dict] = []
     for m in matched_top:
         rec = m["record"]
         lat = _latency_of(rec)
         records_for_decision.append({
             "record_id": rec["record_id"],
-            "record_time": rec.get("timestamp"),
+            "record_time": rec.get("timestamp"),  # 签名条目 = 最近执行时间（衰减口径）
+            "count": rec.get("execution_count", 1),
             "similarity": m["overall"],          # 预计算相似度（决策端跳过重算）
             "query_features": (rec.get("query_record") or {}).get("query_features") or {},
             "database_state": (rec.get("context") or {}).get("database_state") or {},
             "system_state": (rec.get("context") or {}).get("system_state") or {},
             "strategy": (rec.get("strategy") or {}).get("by_dimension") or {},
             "execution_feedback": {
-                "latency_ms": lat,
+                "latency_ms": lat,               # 签名条目 = 平均延迟（聚合口径）
                 "effect": rec.get("execution_result"),
             },
         })
@@ -479,7 +559,9 @@ def retrieve(store, query_analysis: dict, database_state: Optional[dict],
         },
         "knowledge_confidence": knowledge_confidence,
         "matched_records_for_decision": records_for_decision,   # 扩展
-        "match_counts": {"strong": n_strong, "moderate": n_moderate, "weak": n_weak},  # 扩展
+        "match_counts": {"strong": n_strong, "moderate": n_moderate, "weak": n_weak},  # 扩展：签名/记录数
+        "match_executions": {"strong": w_strong, "moderate": w_moderate,
+                             "weak": w_weak},                    # 扩展：覆盖执行数（加权口径）
         "truncated": truncated,                                  # 扩展：top-K 截断说明（未截断为 null）
         "strategy_evaluations": evaluations,                     # 扩展：策略评价表（D1 动态权重）
         "summary_skipped": not summary,                          # 扩展：决策路径跳过展示聚合

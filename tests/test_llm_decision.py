@@ -40,9 +40,10 @@ class FakeLLM:
         return None
 
 
-def _decide(query, llm=None, **kwargs):
+def _decide(query, llm=None, llm_decide=False, **kwargs):
     analysis = analyze(query, query_id="q")
-    return decide({"query_analysis": analysis, **kwargs}, llm=llm)
+    return decide({"query_analysis": analysis, **kwargs}, llm=llm,
+                  llm_decide=llm_decide)
 
 
 REASON_JSON = json.dumps({
@@ -171,3 +172,104 @@ def test_core_fields_deterministic_without_llm():
     core1 = {k: v for k, v in r1.items() if k != "llm_analysis"}
     core2 = {k: v for k, v in r2.items() if k != "llm_analysis"}
     assert core1 == core2
+
+
+# ---------------------------------------------------------------------------
+# LLM 参与决策（decision_mode="llm_primary"）：LLM 选择 + 合法性校验，确定性兜底
+# ---------------------------------------------------------------------------
+
+def _decide_json(decisions: dict, reasons: dict = None) -> str:
+    return json.dumps({"decisions": decisions,
+                       "reasons": reasons or {}}, ensure_ascii=False)
+
+
+def test_llm_decide_valid_selection_applied():
+    # NARROW_Q 只适用 time_pruning；LLM 合法选择 full_scan → 采用并标注
+    llm = FakeLLM(responses=[_decide_json(
+        {"time_pruning": "full_scan", "filter_order": None,
+         "aggregation_placement": None},
+        {"time_pruning": "时间跨度窄但分区覆盖未知，保守选择全表扫描"})])
+    r = _decide(NARROW_Q, llm=llm, llm_decide=True)
+    assert r["decision"]["time_pruning"]["strategy"] == "full_scan"
+    assert "llm_selected" in r["decision"]["time_pruning"]["reason"]
+    assert r["selected_strategy"]["strategy_id"].startswith(
+        "time_pruning=full_scan|")
+    assert any("llm_selected" in n for n in r["notes"])
+    assert llm.calls == 1                            # 决策模式恰好 1 次调用
+
+
+def test_llm_decide_unknown_name_rejected():
+    llm = FakeLLM(responses=[_decide_json(
+        {"time_pruning": "magic_strategy", "filter_order": None,
+         "aggregation_placement": None})])
+    r = _decide(NARROW_Q, llm=llm, llm_decide=True)
+    # 候选外策略名 → 该维度保持确定性决策（兜底）
+    assert r["decision"]["time_pruning"]["strategy"] == "partition_pruning"
+    assert any("候选外策略名" in n for n in r["notes"])
+
+
+def test_llm_decide_unmet_requirements_rejected():
+    # NARROW_Q 无非时间过滤 → filter_order 不适用；LLM 硬选 → 忽略该维度
+    llm = FakeLLM(responses=[_decide_json(
+        {"time_pruning": None, "filter_order": "time_first",
+         "aggregation_placement": "final_level_aggregation"})])
+    r = _decide(NARROW_Q, llm=llm, llm_decide=True)
+    assert r["decision"]["filter_order"]["strategy"] == "not_applicable"
+    assert r["decision"]["aggregation_placement"]["strategy"] == "not_applicable"
+    assert any("维度不适用" in n for n in r["notes"])
+
+
+def test_llm_decide_failure_fully_falls_back():
+    r = _decide(NARROW_Q, llm=FakeLLM(exc=ConnectionError("refused")),
+                llm_decide=True)
+    assert r["decision"]["time_pruning"]["strategy"] == "partition_pruning"
+    assert any("回退确定性决策" in n for n in r["notes"])
+
+
+def test_llm_decide_all_nulls_keep_deterministic():
+    r = _decide(NARROW_Q, llm=FakeLLM(responses=[_decide_json(
+        {"time_pruning": None, "filter_order": None,
+         "aggregation_placement": None})]), llm_decide=True)
+    assert r["decision"]["time_pruning"]["strategy"] == "partition_pruning"
+
+
+def test_llm_decide_equivalent_sql_from_candidate():
+    # 候选提供方带 equivalent_sql（富条目契约：{"strategy": 名, ...}）：
+    # LLM 只选名字，SQL 取自候选条目
+    candidates = {
+        "filter_order": [
+            {"strategy": "time_first",
+             "equivalent_sql": "SELECT s_1666 FROM root.db800.g_0.d_0 WHERE time >= 1640966400000 AND time <= 1640966650000 AND s_1666 > -5 AND s_1766 > -5",
+             "parameters": {}},
+        ],
+        "time_pruning": [{"strategy": "full_scan", "equivalent_sql": None,
+                          "parameters": {}}],
+        "aggregation_placement": [{"strategy": "final_level_aggregation",
+                                   "equivalent_sql": None, "parameters": {}}],
+    }
+    llm = FakeLLM(responses=[_decide_json(
+        {"time_pruning": "full_scan", "filter_order": "time_first",
+         "aggregation_placement": None},
+        {"filter_order": "时间条件选择率更低，时间过滤先行"})])
+    r = _decide(FILTER_Q, llm=llm, llm_decide=True, candidate_strategies=candidates)
+    assert r["decision"]["filter_order"]["strategy"] == "time_first"
+    # equivalent_sql 来自候选提供方，而非 LLM 生成
+    assert r["decision"]["filter_order"]["equivalent_sql"] == \
+        candidates["filter_order"][0]["equivalent_sql"]
+    assert r["selected_strategy"]["equivalent_sql"] == \
+        candidates["filter_order"][0]["equivalent_sql"]
+    assert "time_pruning=full_scan" in r["selected_strategy"]["strategy_id"]
+    assert "filter_order=time_first" in r["selected_strategy"]["strategy_id"]
+
+
+def test_llm_decide_disabled_identical_to_deterministic():
+    # llm_decide=False：即使 LLM 返回决策 JSON 也不采用（与不启用 LLM 决策一致；
+    # LLM 仅做同步解读——1 次 llm_analysis 调用，决策字段逐字段不变）
+    llm = FakeLLM(responses=[_decide_json(
+        {"time_pruning": "full_scan", "filter_order": None,
+         "aggregation_placement": None})])
+    r0 = _decide(NARROW_Q)
+    r1 = _decide(NARROW_Q, llm=llm, llm_decide=False)
+    assert r1["selected_strategy"] == r0["selected_strategy"]
+    assert r1["decision"] == r0["decision"]
+    assert llm.calls == 1                            # 仅解读调用，未走决策请求路径

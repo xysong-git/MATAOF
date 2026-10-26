@@ -1,5 +1,5 @@
 {
-  "knowledge_store": "data/knowledge_fixed_dbs.db",
+  "knowledge_store": "data/knowledge_fixed.db",
   "knowledge_backend": "sqlite",
   "results_dir": "results/round_fixed_dbs",
   "executor": {
