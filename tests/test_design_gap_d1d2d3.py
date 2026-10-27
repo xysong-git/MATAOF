@@ -24,6 +24,8 @@ from mataof.runner import PipelineRunner, RunnerConfig  # noqa: E402
 
 NARROW_Q = ("SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 "
             "AND time <= 1640970000000")
+MULTI_Q = ("SELECT s_0 FROM root.test.d_0, root.test.d_1 WHERE time >= 1640966405000 "
+           "AND time <= 1640970000000")
 AGG_Q = ("SELECT AVG(s_0) FROM root.test.d_0 "
          "GROUP BY ([1640966405000, 1640976405000), 1h)")
 
@@ -139,25 +141,24 @@ def test_evaluation_prior_function():
 
 
 def test_decision_uses_evaluation_prior():
-    evals = {"range_query|time_pruning|partition_pruning":
+    # 评价表先验（D1）：同维度两策略的成功率差异 → 先验支撑选择
+    evals = {"range_query|alignment|align_by_device":
              {"count": 10, "success": 9, "success_ratio": 0.9, "avg_latency_ms": 10.0},
-             "range_query|time_pruning|full_scan":
+             "range_query|alignment|time_aligned":
              {"count": 10, "success": 1, "success_ratio": 0.1, "avg_latency_ms": 80.0}}
+    analysis = analyze(MULTI_Q, query_id="q1")
+    r = decide({"query_analysis": analysis, "strategy_evaluations": evals})
+    assert r["decision"]["alignment"]["strategy"] == "align_by_device"
+    assert "策略评价表先验" in r["decision"]["alignment"]["reason"]
+
+
+def test_evaluation_prior_cannot_override_requirements():
+    # 需求不满足的候选（单设备查询选对齐策略）即使先验极好也不可选
+    evals = {"range_query|alignment|align_by_device":
+             {"count": 50, "success": 50, "success_ratio": 1.0, "avg_latency_ms": 5.0}}
     analysis = analyze(NARROW_Q, query_id="q1")
     r = decide({"query_analysis": analysis, "strategy_evaluations": evals})
-    assert r["decision"]["time_pruning"]["strategy"] == "partition_pruning"
-    assert "策略评价表先验" in r["decision"]["time_pruning"]["reason"]
-
-
-def test_evaluation_prior_cannot_unlock_gates():
-    # 高风险 chunk 策略即使评价表先验极好，无实例证据仍被门控排除
-    evals = {"range_query|time_pruning|chunk_level_filtering":
-             {"count": 50, "success": 50, "success_ratio": 1.0, "avg_latency_ms": 5.0}}
-    db = {"physical_organization": {"chunk_level": {"total_chunks": 1000, "covered_chunks": 5}}}
-    analysis = analyze(NARROW_Q, query_id="q1")
-    r = decide({"query_analysis": analysis, "database_state": db,
-                "strategy_evaluations": evals})
-    assert r["decision"]["time_pruning"]["strategy"] != "chunk_level_filtering"
+    assert r["decision"]["alignment"]["strategy"] == "not_applicable"
 
 
 # ---------------------------------------------------------------------------
@@ -167,16 +168,15 @@ def test_evaluation_prior_cannot_unlock_gates():
 def test_fixed_strategy_mode(tmp_path):
     runner = PipelineRunner(RunnerConfig(
         results_dir=str(tmp_path),
-        fixed_strategy={"time_pruning": "full_scan", "filter_order": "time_first",
-                        "aggregation_placement": "final_level_aggregation"},
+        fixed_strategy={"alignment": "time_aligned", "fetch_size": "fetch_default"},
     ))
     t = runner.run_query(NARROW_Q, query_id="f1")
     d = t["decision"]
     assert d["decision_status"] == "fixed_strategy"
-    assert d["decision"]["time_pruning"]["strategy"] == "full_scan"
-    assert d["decision"]["filter_order"]["strategy"] == "not_applicable"  # 非时间条件 0
+    assert d["decision"]["alignment"]["strategy"] == "not_applicable"  # 单设备
+    assert d["decision"]["fetch_size"]["strategy"] == "fetch_default"
     assert d["selected_strategy"]["strategy_id"] == \
-        "time_pruning=full_scan|filter_order=not_applicable|aggregation_placement=not_applicable"
+        "alignment=not_applicable|fetch_size=fetch_default"
     # 不使用历史与决策证据
     assert t["knowledge_retrieval"]["matched_count"] == 0
     # 执行/监控/入库链路照常（口径一致）
@@ -184,13 +184,12 @@ def test_fixed_strategy_mode(tmp_path):
     assert t["knowledge_update"]["stored"] is True
 
 
-def test_fixed_strategy_applies_to_aggregation(tmp_path):
+def test_fixed_strategy_applies_to_multi_device(tmp_path):
     runner = PipelineRunner(RunnerConfig(
         results_dir=str(tmp_path),
-        fixed_strategy={"time_pruning": "full_scan", "filter_order": "time_first",
-                        "aggregation_placement": "final_level_aggregation"},
+        fixed_strategy={"alignment": "time_aligned", "fetch_size": "fetch_default"},
     ))
-    t = runner.run_query(AGG_Q, query_id="f2")
+    t = runner.run_query(MULTI_Q, query_id="f2")
     d = t["decision"]
-    assert d["decision"]["aggregation_placement"]["strategy"] == "final_level_aggregation"
+    assert d["decision"]["alignment"]["strategy"] == "time_aligned"
     assert d["decision_status"] == "fixed_strategy"

@@ -62,12 +62,12 @@ def _ingest(km: KnowledgeMemoryAgent, query_id: str, query: str, strategy_id: st
     })
 
 
-PRUNE = {"time_pruning": "partition_pruning", "filter_order": "not_applicable",
-         "aggregation_placement": "not_applicable"}
-SCAN = {"time_pruning": "full_scan", "filter_order": "not_applicable",
-        "aggregation_placement": "not_applicable"}
-SID_PRUNE = "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable"
-SID_SCAN = "time_pruning=full_scan|filter_order=not_applicable|aggregation_placement=not_applicable"
+PRUNE = {"alignment": "time_aligned", "fetch_size": "fetch_large"}
+SCAN = {"alignment": "align_by_device", "fetch_size": "fetch_default"}
+SID_PRUNE = "alignment=time_aligned|fetch_size=fetch_large"
+SID_SCAN = "alignment=align_by_device|fetch_size=fetch_default"
+SID_AGG = "alignment=time_aligned|fetch_size=fetch_default"
+AGG_DIM = {"alignment": "time_aligned", "fetch_size": "fetch_default"}
 
 
 # ---------------------------------------------------------------------------
@@ -265,9 +265,9 @@ def test_decision_agent_consumes_km_output_end_to_end():
             timestamp=1700000003000)
 
     analysis_new = analyze(MEDIUM_Q, query_id="new")
-    # 无历史：medium 范围无上下文加分、无历史证据 → full_scan
+    # 无历史：fetch_large 有实测先验加分 → 直接选择
     r_no_hist = decide({"query_analysis": analysis_new})
-    assert r_no_hist["decision"]["time_pruning"]["strategy"] == "full_scan"
+    assert r_no_hist["decision"]["fetch_size"]["strategy"] == "fetch_large"
 
     # 有历史：KM 检索结果作为决策输入
     km_result = km.retrieve(analysis_new, query_id="new")
@@ -276,7 +276,7 @@ def test_decision_agent_consumes_km_output_end_to_end():
         "query_analysis": analysis_new,
         "historical_records": km_result["matched_records_for_decision"],
     })
-    assert r_with_hist["decision"]["time_pruning"]["strategy"] == "partition_pruning"
+    assert r_with_hist["decision"]["fetch_size"]["strategy"] == "fetch_large"
     used = [h["record_id"] for h in r_with_hist["evidence"]["historical_records"]
             if h.get("record_id")]
     assert used, "决策应引用历史记录"
@@ -384,10 +384,8 @@ def test_stats():
 # 等价性：融合快路径 vs 参考逐条路径（检索聚合优化第三步）
 # ---------------------------------------------------------------------------
 
-SID_AGG = ("time_pruning=partition_pruning|filter_order=not_applicable|"
-           "aggregation_placement=final_level_aggregation")
-AGG_DIM = {"time_pruning": "partition_pruning", "filter_order": "not_applicable",
-           "aggregation_placement": "final_level_aggregation"}
+SID_AGG = ("alignment=align_by_device|fetch_size=fetch_large")
+AGG_DIM = {"alignment": "align_by_device", "fetch_size": "fetch_large"}
 
 
 def _seed_mixed(km: KnowledgeMemoryAgent, n_dup: int = 2) -> None:

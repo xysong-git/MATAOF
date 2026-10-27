@@ -9,7 +9,7 @@
     "user": "root",
     "password": "root",
     "fetch_size": 1024,
-    "measure_baseline": true
+    "measure_baseline": false
   },
   "database_state": {
     "data_scale_level": "large"

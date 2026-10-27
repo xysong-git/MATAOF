@@ -24,6 +24,7 @@ from typing import Optional
 from mataof.agents.optimization_decision.catalog import (
     NOT_APPLICABLE,
     STRATEGY_CATALOG,
+    alignment_applies,
     check_requirement,
 )
 from mataof.agents.optimization_decision.context import DecisionContext
@@ -32,25 +33,17 @@ from mataof.agents.optimization_decision.similarity import HistoryEvidence
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
 
 BASE_SCORES = {
-    "full_scan": 0.30,
-    "partition_pruning": 0.55,
-    "chunk_level_filtering": 0.70,
-    "time_first": 0.60,
-    "device_tag_first": 0.35,
-    "final_level_aggregation": 0.50,
-    "intermediate_level_aggregation": 0.55,
-    "scan_level_aggregation": 0.60,
+    # alignment：默认对齐为数据库默认且实测占优（宽设备扫描 15~25×），给结构性先验
+    "time_aligned": 0.55,
+    "align_by_device": 0.45,
+    # fetch_size：两者等基分，由上下文加分与执行反馈（评价表）决定
+    "fetch_default": 0.50,
+    "fetch_large": 0.50,
 }
 
 # 系统负载调整（load_level=high 时；low/normal/unknown 不调整）
-_SYSTEM_BONUS_HIGH_LOAD = {
-    "full_scan": -0.05,
-    "partition_pruning": 0.05,
-    "chunk_level_filtering": 0.05,
-    "time_first": 0.05,
-    "scan_level_aggregation": 0.05,
-    "final_level_aggregation": -0.05,
-}
+# 新策略空间暂无实测的负载交互 → 空（诚实：不编造调整依据）
+_SYSTEM_BONUS_HIGH_LOAD = {}
 
 
 @dataclass
@@ -90,56 +83,6 @@ class DimensionResult:
 # 工具
 # ---------------------------------------------------------------------------
 
-def _selectivity_map(ctx: DecisionContext) -> dict:
-    """选择率数据：分析输出的（已验证）选择率 ∪ 决策输入的 statistics.selectivity（校验后）。"""
-    out: dict = {}
-    sel = (ctx.features.get("filter") or {}).get("selectivity") or {}
-    for k, v in sel.items():
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1:
-            out[k] = float(v)
-    db_sel = ((ctx.database_state or {}).get("statistics") or {}).get("selectivity") or {}
-    for k, v in db_sel.items():
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1:
-            out[k] = float(v)
-    return out
-
-
-def _avg_selectivity_by_type(ctx: DecisionContext) -> dict:
-    """按条件类型聚合的平均选择率（只有数据库提供了选择率的条件参与）。"""
-    sel_map = _selectivity_map(ctx)
-    out: dict[str, list[float]] = {}
-    for cond in (ctx.features.get("filter") or {}).get("conditions") or []:
-        ctype, col = cond.get("type"), cond.get("column")
-        if not ctype or col is None or col not in sel_map:
-            continue
-        out.setdefault(ctype, []).append(sel_map[col])
-    return {t: sum(v) / len(v) for t, v in out.items()}
-
-
-def _partition_coverage(ctx: DecisionContext) -> Optional[float]:
-    pi = (ctx.database_state or {}).get("partition_info")
-    if not isinstance(pi, dict):
-        return None
-    total, covered = pi.get("total_partitions"), pi.get("covered_partitions")
-    if (isinstance(total, (int, float)) and not isinstance(total, bool)
-            and isinstance(covered, (int, float)) and not isinstance(covered, bool)
-            and total > 0 and 0 <= covered <= total):
-        return covered / total
-    return None
-
-
-def _chunk_coverage(ctx: DecisionContext) -> Optional[float]:
-    cl = ((ctx.database_state or {}).get("physical_organization") or {}).get("chunk_level")
-    if not isinstance(cl, dict):
-        return None
-    total, covered = cl.get("total_chunks"), cl.get("covered_chunks")
-    if (isinstance(total, (int, float)) and not isinstance(total, bool)
-            and isinstance(covered, (int, float)) and not isinstance(covered, bool)
-            and total > 0 and 0 <= covered <= total):
-        return covered / total
-    return None
-
-
 def _history_bonus(ev: HistoryEvidence, dim: str, name: str, labels: list) -> float:
     count = ev.count_for(dim, name)
     if count == 0:
@@ -170,82 +113,27 @@ def _system_bonus(ctx: DecisionContext, name: str, labels: list) -> float:
     return 0.0
 
 
-def _range_narrow(ctx: DecisionContext) -> bool:
-    return (ctx.features.get("time") or {}).get("range_level") == "narrow"
-
-
-def _scan_small(ctx: DecisionContext) -> bool:
-    return (ctx.features.get("scan") or {}).get("scan_level") == "narrow"
-
-
 def _context_bonus(ctx: DecisionContext, dim: str, name: str, labels: list) -> float:
-    """各策略的上下文加分（只使用已提供的数据）。"""
+    """各策略的上下文加分（只使用已提供的数据；实测依据见各策略注释）。"""
     bonus = 0.0
+    dev = (ctx.features.get("device") or {}).get("device_count")
+    dev_ok = isinstance(dev, (int, float)) and not isinstance(dev, bool)
 
-    if dim == "time_pruning":
-        if name == "partition_pruning":
-            if _range_narrow(ctx):
-                bonus += 0.10
-                labels.append("时间范围 narrow（+0.10）")
-            cov = _partition_coverage(ctx)
-            if cov is not None and cov <= 0.25:
-                bonus += 0.10
-                labels.append(f"分区覆盖 {cov:.1%}（≤25%，+0.10）")
-        elif name == "chunk_level_filtering":
-            if _range_narrow(ctx):
-                bonus += 0.10
-                labels.append("时间范围 narrow（+0.10）")
-            cov = _chunk_coverage(ctx)
-            if cov is not None and cov <= 0.10:
-                bonus += 0.10
-                labels.append(f"chunk 覆盖 {cov:.1%}（≤10%，+0.10）")
+    if dim == "alignment":
+        if name == "time_aligned" and dev_ok and dev >= 10:
+            # 实测：宽设备扫描下默认对齐比 ALIGN BY DEVICE 快 15~25×（结果行数爆炸）
+            bonus += 0.10
+            labels.append(f"设备数 {int(dev)}（≥10，实测默认对齐显著占优，+0.10）")
+        elif name == "align_by_device" and dev_ok and dev <= 5:
+            # 实测：少量设备下两者接近（~12%），按设备对齐略优
+            bonus += 0.05
+            labels.append(f"设备数 {int(dev)}（≤5，实测按设备对齐略优，+0.05）")
 
-    elif dim == "filter_order":
-        if name == "time_first":
-            if _range_narrow(ctx):
-                bonus += 0.10
-                labels.append("时间范围 narrow（+0.10）")
-            ts = _avg_selectivity_by_type(ctx).get("time")
-            if ts is not None:
-                if ts <= 0.1:
-                    bonus += 0.10
-                    labels.append(f"时间条件平均选择率 {ts:.3f}（≤0.1，+0.10）")
-                elif ts >= 0.5:
-                    bonus -= 0.10
-                    labels.append(f"时间条件平均选择率 {ts:.3f}（≥0.5，-0.10）")
-        elif name == "device_tag_first":
-            sel_by_type = _avg_selectivity_by_type(ctx)
-            nt = next((v for t, v in sel_by_type.items() if t != "time"), None)
-            ts = sel_by_type.get("time")
-            if nt is not None and nt <= 0.1 and (ts is None or nt < ts):
-                bonus += 0.40
-                labels.append(f"非时间条件平均选择率 {nt:.3f}（≤0.1 且优于时间条件，+0.40）")
-            dev = (ctx.features.get("device") or {}).get("device_count")
-            scale = (ctx.database_state or {}).get("device_scale")
-            if (isinstance(dev, (int, float)) and not isinstance(dev, bool)
-                    and isinstance(scale, (int, float)) and not isinstance(scale, bool)
-                    and scale > 0 and dev / scale <= 0.1):
-                bonus += 0.15
-                labels.append(f"设备过滤覆盖 {dev}/{scale}（≤10%，+0.15）")
-
-    elif dim == "aggregation_placement":
-        if name == "scan_level_aggregation":
-            if _range_narrow(ctx):
-                bonus += 0.15
-                labels.append("时间范围 narrow（+0.15）")
-            elif _scan_small(ctx):
-                bonus += 0.15
-                labels.append("数据库扫描估计为小范围（scan_level=narrow，+0.15）")
-            if (ctx.features.get("aggregation") or {}).get("has_window"):
-                bonus += 0.10
-                labels.append("窗口聚合（+0.10）")
-        elif name == "intermediate_level_aggregation":
-            if (ctx.features.get("aggregation") or {}).get("has_group_by"):
-                bonus += 0.10
-                labels.append("存在 GROUP BY（+0.10）")
-            if (ctx.features.get("scan") or {}).get("possible_large_intermediate_result") is True:
-                bonus += 0.10
-                labels.append("可能产生较大中间结果（+0.10）")
+    elif dim == "fetch_size":
+        if name == "fetch_large":
+            # 实测：大结果批次减少分页往返，~15-20% 收益（大小结果集一致方向）
+            bonus += 0.05
+            labels.append("实测大批次 ~15-20% 收益（+0.05）")
 
     return bonus
 
@@ -300,20 +188,12 @@ def evaluate_dimension(dim: str, ctx: DecisionContext,
     result = DimensionResult(dimension=dim, applicable=False)
 
     # ---- 适用性 ----
-    if dim == "time_pruning":
-        if not ctx.has_time_filter and not ctx.time_window_group_by:
-            result.not_applicable_reason = "查询无时间过滤条件，也无时间窗口分组"
+    if dim == "alignment":
+        if not alignment_applies(ctx.features):
+            result.not_applicable_reason = "单设备查询（对齐方式无差异）"
             return result
-    elif dim == "filter_order":
-        if ctx.non_time_filter_count < 2:
-            result.not_applicable_reason = (
-                f"非时间过滤条件数为 {ctx.non_time_filter_count}（<2），过滤顺序无意义"
-            )
-            return result
-    elif dim == "aggregation_placement":
-        if not (ctx.features.get("aggregation") or {}).get("has_aggregation"):
-            result.not_applicable_reason = "查询不含聚合"
-            return result
+    elif dim == "fetch_size":
+        pass   # 恒适用：结果批次大小对所有查询都成立
     result.applicable = True
 
     catalog = STRATEGY_CATALOG[dim]

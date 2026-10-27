@@ -184,9 +184,8 @@ def query_analysis_output_template() -> dict:
             },
         },
         "optimization_relevant_features": {
-            "time_pruning": [],             # 只陈述"属于相关候选优化维度"，不选策略
-            "filter_order": [],
-            "aggregation_placement": [],
+            "alignment": [],                # 只陈述"属于相关候选优化维度"，不选策略
+            "fetch_size": [],
         },
         "unknown_features": [],             # 所有标记为 unknown 的特征及其原因
         "analysis_confidence": 0.0,
@@ -219,12 +218,10 @@ def optimization_decision_output_template() -> dict:
     return {
         "query_id": "",
         "decision": {
-            "time_pruning": {"strategy": "", "reason": "", "confidence": 0.0,
-                             "equivalent_sql": None},
-            "filter_order": {"strategy": "", "reason": "", "confidence": 0.0,
-                             "equivalent_sql": None},
-            "aggregation_placement": {"strategy": "", "reason": "", "confidence": 0.0,
-                                      "equivalent_sql": None},
+            "alignment": {"strategy": "", "reason": "", "confidence": 0.0,
+                          "equivalent_sql": None},
+            "fetch_size": {"strategy": "", "reason": "", "confidence": 0.0,
+                           "equivalent_sql": None},
         },
         "selected_strategy": {"strategy_id": "", "strategy_parameters": {},
                               "equivalent_sql": None},
@@ -264,9 +261,8 @@ HISTORICAL_RECORD_CONTRACT = {
     "database_state": {"data_scale_level": "small", "device_scale": 100},   # 可选
     "system_state": {"load_level": "low"},                                    # 可选
     "strategy": {                               # 必填：该记录实际使用的策略
-        "time_pruning": "full_scan",
-        "filter_order": "time_first",
-        "aggregation_placement": "not_applicable",
+        "alignment": "time_aligned",
+        "fetch_size": "fetch_default",
     },
     "execution_feedback": {"latency_ms": 12.3, "rows_scanned": 450},         # 必填：执行反馈
 }

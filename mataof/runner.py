@@ -283,13 +283,16 @@ class PipelineRunner:
             )
         t_retrieval = time.perf_counter()
         # 3. 决策（LLM 增强可选；bonus 开关来自配置 llm 节）
+        from mataof.agents.optimization_decision.provider import build_candidates
         decision_input = {
             "query_id": query_id,
             "query_analysis": analysis,
             "database_state": self.config.database_state,
             "system_state": self.config.system_state,
             "historical_records": km_result.get("matched_records_for_decision") or [],
-            "candidate_strategies": self.config.candidate_strategies,
+            # 候选提供方按查询生成 equivalent_sql/执行参数（外部配置优先）
+            "candidate_strategies": build_candidates(
+                query, analysis, self.config.candidate_strategies),
             "baseline_strategy": self.config.baseline_strategy,
             "reference_time": self.config.reference_time,
             "llm_preference_bonus": bool((self.config.llm or {}).get("preference_bonus")),
@@ -376,7 +379,8 @@ class PipelineRunner:
             "analysis_ms": ms(t_entry, t_analysis),
             "retrieval_ms": ms(t_analysis, t_retrieval),
             "decision_ms": ms(t_retrieval, t_decision),
-            # 执行阶段含 baseline 配对双执行，与 response_time_ms 不是同一口径
+            # 执行阶段 = 优化后语句的单次执行（含结果集完整消费）；
+            # 与 response_time_ms 同一口径（客户端墙钟）
             "execution_stage_ms": ms(t_decision, t_execution),
             "monitoring_ms": ms(t_execution, t_monitoring),
             "knowledge_update_ms": ms(t_monitoring, t_update),
@@ -635,15 +639,9 @@ class PipelineRunner:
         out = optimization_decision_output_template()
         out["query_id"] = query_id
         features = analysis.get("query_features") or {}
-        t = features.get("time") or {}
-        agg = features.get("aggregation") or {}
-        counts = (features.get("filter") or {}).get("type_counts") or {}
-        non_time = sum(v for k, v in counts.items() if k != "time")
-        gbd = agg.get("group_by_details") or {}
         applicable = {
-            "time_pruning": bool(t.get("has_time_filter")) or gbd.get("type") == "time_window",
-            "filter_order": non_time >= 2,
-            "aggregation_placement": bool(agg.get("has_aggregation")),
+            "alignment": bool((features.get("device") or {}).get("multi_device")),
+            "fetch_size": True,
         }
         parts = []
         for dim in DIMENSIONS:

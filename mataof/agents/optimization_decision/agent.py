@@ -253,17 +253,6 @@ class OptimizationDecisionAgent:
 # reason 生成（可追踪：引用具体证据，不做全局最优声明）
 # ---------------------------------------------------------------------------
 
-def _time_desc(ctx: DecisionContext) -> str:
-    t = ctx.features.get("time") or {}
-    if t.get("has_time_filter"):
-        s, e = t.get("start_time"), t.get("end_time")
-        if s is not None and e is not None:
-            return (f"时间边界已知（[{s}, {e}]，跨度 {t.get('time_span')} ms，"
-                    f"{t.get('range_level')}）")
-        return f"存在时间过滤（形式 {t.get('time_condition_form')}），起止未知"
-    return "无时间过滤（窗口范围来自 GROUP BY）"
-
-
 def _fallback_reason(dim: str, r: DimensionResult, ctx: DecisionContext) -> str:
     reasons = "；".join(e.excluded_reason for e in r.evaluations if e.excluded_reason)
     return (f"候选策略均不满足安全选择条件（{reasons or '无可用候选'}），"
@@ -273,14 +262,12 @@ def _fallback_reason(dim: str, r: DimensionResult, ctx: DecisionContext) -> str:
 def _selection_reason(dim: str, r: DimensionResult, ctx: DecisionContext) -> str:
     chosen = r.chosen
     parts: list[str] = []
-    if dim == "time_pruning":
-        parts.append(_time_desc(ctx))
-    elif dim == "filter_order":
-        parts.append(f"非时间过滤条件 {ctx.non_time_filter_count} 个")
-    elif dim == "aggregation_placement":
-        agg = ctx.features.get("aggregation") or {}
-        names = sorted({f.get("function") for f in agg.get("aggregation_functions") or []})
-        parts.append(f"聚合函数：{', '.join(names)}")
+    if dim == "alignment":
+        dev = (ctx.features.get("device") or {}).get("device_count")
+        if dev is not None:
+            parts.append(f"设备数 {dev}")
+    elif dim == "fetch_size":
+        pass   # 上下文加分标签已说明依据
 
     for label in chosen.factor_labels:
         parts.append(label)
@@ -301,24 +288,7 @@ def _strategy_parameters(results: dict, ctx: DecisionContext,
     """
     llm_chosen = llm_chosen or {}
     params: dict = {}
-    r = results["time_pruning"]
-    ov_tp = llm_chosen.get("time_pruning")
-    if ov_tp is not None:
-        if ov_tp["name"] in ("partition_pruning", "chunk_level_filtering"):
-            t = ctx.features.get("time") or {}
-            params["time_pruning"] = {
-                "start_time": t.get("start_time"),
-                "end_time": t.get("end_time"),
-            }
-    elif r.applicable and not r.is_fallback and r.chosen.name in (
-        "partition_pruning", "chunk_level_filtering",
-    ):
-        t = ctx.features.get("time") or {}
-        params["time_pruning"] = {
-            "start_time": t.get("start_time"),
-            "end_time": t.get("end_time"),
-        }
-    # 候选携带的执行级参数（候选提供方给出，原样透传）
+    # 候选携带的执行级参数（候选提供方给出，原样透传——如 fetch_size）
     for dim in DIMENSIONS:
         r = results[dim]
         ov = llm_chosen.get(dim)

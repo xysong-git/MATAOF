@@ -62,9 +62,12 @@ def test_aggregate_native_jsonl(tmp_path):
     assert l["p50_ms"] == 10.0 and l["p95_ms"] == 20.0
     assert r["total_time_s"] == 1.5
     assert r["throughput_qps"] == 2.0
-    # 格式化输出含口径说明
+    # 格式化输出与 agent/llm 汇总同风格
     text = _run("aggregate_native.py", str(f))
-    assert "客户端墙钟" in text and "成功率" in text
+    for key in ("查询数", "总用时", "吞吐", "执行: 成功", "成功率", "效果分布",
+                "延迟（成功执行", "P50", "P95", "P99", "决策开销·各阶段（原生模式）",
+                "端到端（原生模式"):
+        assert key in text, f"native 汇总缺失字段: {key}"
 
 
 def test_aggregate_agent(tmp_path):

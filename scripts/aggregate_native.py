@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from mataof.report import (  # noqa: E402
     latency_stats,
     percentile_nearest_rank as percentile,
+    resource_stats,
 )
 
 COST_RE = re.compile(r"It costs ([\d.]+)s")
@@ -59,12 +60,18 @@ def parse_jsonl(files: list) -> dict:
 
     status = {"success": 0, "failed": 0, "timeout": 0, "unknown": 0}
     latencies: list = []
+    cpu, cpu_peak, mem, mem_peak = [], [], [], []
     for r in rows:
         st = r.get("execution_status") or "unknown"
         status[st] = status.get(st, 0) + 1
         v = r.get("response_time_ms")
         if st == "success" and isinstance(v, (int, float)) and not isinstance(v, bool):
             latencies.append(float(v))
+        for src, dst in (("cpu_utilization", cpu), ("cpu_utilization_peak", cpu_peak),
+                         ("memory_utilization", mem), ("memory_utilization_peak", mem_peak)):
+            x = r.get(src)
+            if isinstance(x, (int, float)) and not isinstance(x, bool):
+                dst.append(float(x))
 
     total = len(rows)
     return {
@@ -74,6 +81,12 @@ def parse_jsonl(files: list) -> dict:
         "total_time_s": round(batch_time, 2) if n_batches else None,
         "throughput_qps": round(total / batch_time, 4) if batch_time > 0 else None,
         "latency_ms": latency_stats(latencies),
+        "resource_utilization": {
+            "cpu": resource_stats(cpu),
+            "cpu_peak": resource_stats(cpu_peak),
+            "memory": resource_stats(mem),
+            "memory_peak": resource_stats(mem_peak),
+        },
         "success_rate": round(status.get("success", 0) / total, 4) if total else None,
     }
 
@@ -113,14 +126,32 @@ def parse_out(files: list) -> dict:
 
 
 def print_jsonl(r: dict) -> None:
+    """与 agent/llm 汇总完全一致的排版（format_batch_summary 风格）。
+
+    原生模式无优化系统：决策开销为 0、端到端 = 执行、无效果评估（如实标注）。
+    """
     status = r["status"]
     l = r["latency_ms"]
-    print(f"查询执行数: {r['executions']} | 口径: {r['format']}")
-    print(f"状态: 成功 {status['success']} / 失败 {status['failed']} / "
+    total = r["executions"]
+    print(f"查询数: {total} | 总用时: {r['total_time_s']}s | "
+          f"吞吐: {r['throughput_qps']} 查询/秒")
+    print(f"执行: 成功 {status['success']} / 失败 {status['failed']} / "
           f"超时 {status['timeout']} / 未知 {status['unknown']}（成功率 {r['success_rate']}）")
-    print(f"总用时（客户端墙钟）: {r['total_time_s']}s | 吞吐: {r['throughput_qps']} 查询/秒")
-    print(f"延迟: avg {l['avg_ms']}ms | min {l['min_ms']}ms | max {l['max_ms']}ms | "
+    print(f"效果分布: insufficient_evidence {total}（原生模式无效果评估）")
+    print(f"延迟（成功执行，样本 {l['samples']}）: avg {l['avg_ms']}ms | "
+          f"min {l['min_ms']}ms | max {l['max_ms']}ms | "
           f"P50 {l['p50_ms']}ms | P95 {l['p95_ms']}ms | P99 {l['p99_ms']}ms")
+    print("决策开销·各阶段（原生模式）: 无（无优化系统，口径同 agent 各阶段之和）")
+    print(f"端到端（原生模式，= 执行）: avg {l['avg_ms']}ms | "
+          f"min {l['min_ms']}ms | max {l['max_ms']}ms | "
+          f"P50 {l['p50_ms']}ms | P95 {l['p95_ms']}ms | P99 {l['p99_ms']}ms")
+    res = r.get("resource_utilization") or {}
+    cpu, cpu_peak = res.get("cpu") or {}, res.get("cpu_peak") or {}
+    mem, mem_peak = res.get("memory") or {}, res.get("memory_peak") or {}
+    if (cpu.get("samples") or mem.get("samples")):
+        print(f"资源（样本 {cpu.get('samples', 0)}）: CPU avg {cpu.get('avg')} / "
+              f"峰值 {cpu_peak.get('avg')} | 内存 avg {mem.get('avg')} / "
+              f"峰值 {mem_peak.get('max')}")
 
 
 def print_out(r: dict) -> None:

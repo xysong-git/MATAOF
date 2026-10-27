@@ -9,7 +9,7 @@
     "user": "root",
     "password": "root",
     "fetch_size": 1024,
-    "measure_baseline": true
+    "measure_baseline": false
   },
   "database_state": {
     "data_scale_level": "large"
@@ -22,8 +22,7 @@
   "knowledge_save_interval": 500,
   "async_drain_timeout": 0,
   "fixed_strategy": {
-    "time_pruning": "full_scan",
-    "filter_order": "time_first",
-    "aggregation_placement": "final_level_aggregation"
+    "alignment": "time_aligned",
+    "fetch_size": "fetch_default"
   }
 }

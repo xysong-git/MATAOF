@@ -77,6 +77,9 @@ full_scan / time_first / final_level_aggregation），跳过决策 Agent 与历�
 `--sample seq|random`、`--seed N`、`--workers N`（查询级并行，agent/llm/fixed
 模式生效）。
 
+**缓存协议（三组对照前手动执行，见 §1.3）**：每个模式开跑前重启 IoTDB +
+清 OS 页缓存——否则后跑的模式继承前序模式的缓存预热，跨模式延迟不可比。
+
 **workers 选型（实测结论）**：
 - 默认异步 LLM 模式与 agent/fixed 模式：主链路为 CPU 密集，workers>1 反而更慢
   （GIL 串行化：29k 库实测 workers=1 约 896ms/条 vs workers=4 约 2215ms/条）；
@@ -164,9 +167,45 @@ native 由 `run_native_client.py` 直发原始 SQL 测量（采样与 agent 共�
   轮次汇总（aggregate_agent）与批次汇总口径完全一致；旧轮次数据无这些字段时
   如实不计样本。
 
+## 1.3 缓存协议（三组对照公平性，手动执行）
+
+三个模式共享同一个 IoTDB 实例与 OS 页缓存——**后跑的模式会继承前序模式的
+缓存预热**（实测：dbl 上执行延迟因缓存状态漂移 ±20%），跨模式延迟对比必须在
+相同缓存状态下进行。**每个模式开跑前**手动执行：
+
+```bash
+IOTDB=/opt/program-code/iotdb/distribution/target/apache-iotdb-2.0.6-all-bin/apache-iotdb-2.0.6-all-bin
+
+# 1) 重启 IoTDB（清服务器进程内 chunk cache / 元数据缓存）
+#    注意：stop 脚本返回非零退出码是常态（不要用 set -e 包裹）
+bash $IOTDB/sbin/stop-standalone.sh
+sleep 10                                   # 等 shutdown hook 完成、端口释放
+bash $IOTDB/sbin/start-standalone.sh
+sleep 15                                   # 等端口就绪（首次启动 ~10-15s）
+ss -tln | grep 6667                        # 确认在监听再开跑
+
+# 2) 清 OS 页缓存（需 root；1=page cache，2=dentry/inode，3=全部）
+sync && echo 3 | sudo tee /proc/sys/vm/drop_caches
+```
+
+三组对照的完整执行顺序：
+
+```bash
+for m in native agent llm; do
+  <执行上面的缓存协议>
+  bash scripts/run_experiment.sh --mode $m --query-dir query/queries_dbl \
+      --per-file-limit 100 --sample random --seed 42
+done
+```
+
 ## 2. 执行一轮（完整流程）
 
-查询集：`query/queries_{dbs,dbm,dbl}/q1.sql ~ q11.sql`，每个文件 2000 条。
+查询集：`query/queries_{dbs,dbm,dbl}/q1.sql ~ q12.sql`，每个文件 2000 条。
+q12 为**通配宽扫描查询**（`FROM root.<scale>.g_0.*`，点扫/双传感器/计数三模板，
+生成器 `scripts/gen_wildcard_queries.py`）——alignment 杠杆（ALIGN BY DEVICE vs
+默认对齐）的载体；实测该子句在通配查询上慢 8~25×（结果行数爆炸），策略选择的
+价值 = 避开此降级（guardrail）+ fetch_size 收益。注：通配下部分设备 s_333 为
+BOOLEAN——数值谓词/聚合会被引擎拒绝（701），故 q12 只用点扫/计数模板。
 
 **方式 A：逐文件执行（推荐，进度可见、失败不中断）**
 

@@ -26,7 +26,9 @@ EXECUTOR = {
     "user": "root",
     "password": "root",
     "fetch_size": 1024,
-    "measure_baseline": True,
+    # 评估策略更新：不再逐条配对双执行——每条查询只执行优化后的语句；
+    # baseline（原始语句）由 native 模式单独跑，跨轮对比。
+    "measure_baseline": False,
 }
 
 # LLM 共享片段（OpenAI 兼容协议接本地 vLLM Qwen3-8B）
@@ -52,9 +54,8 @@ def llm_section(scale: str) -> dict:
 
 
 FIXED_STRATEGY = {
-    "time_pruning": "full_scan",
-    "filter_order": "time_first",
-    "aggregation_placement": "final_level_aggregation",
+    "alignment": "time_aligned",
+    "fetch_size": "fetch_default",
 }
 
 

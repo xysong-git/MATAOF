@@ -130,37 +130,40 @@ class IoTDBExecutor:
         self._fetch_size = int(fetch_size)
         self.measure_baseline = bool(measure_baseline)
         self._session_factory = session_factory or _IotdbSession
-        self._session: Any = None
+        self._sessions: dict = {}          # fetch_size → session（参数级杠杆多会话缓存）
         self._exec_lock = threading.Lock()   # Session 非线程安全：执行串行化（B2 并行）
 
     # ------------------------------------------------------------------
-    def _open(self) -> Any:
-        if self._session is not None:
-            return self._session
+    def _open(self, fetch_size: Optional[int] = None) -> Any:
+        fs = int(fetch_size) if fetch_size else self._fetch_size
+        sess = self._sessions.get(fs)
+        if sess is not None:
+            return sess
         if self._session_factory is None:
             raise RuntimeError("未安装 apache-iotdb 客户端（pip install apache-iotdb）")
-        session = self._session_factory(
+        sess = self._session_factory(
             self._host, self._port, self._user, self._password,
-            fetch_size=self._fetch_size,
+            fetch_size=fs,
         )
-        session.open(False)
-        self._session = session
-        return session
+        sess.open(False)
+        self._sessions[fs] = sess
+        return sess
 
     def close(self) -> None:
-        if self._session is not None:
+        for sess in list(self._sessions.values()):
             try:
-                self._session.close()
+                sess.close()
             except Exception:
                 pass
-            self._session = None
+        self._sessions = {}
 
     # ------------------------------------------------------------------
-    def _run_sql(self, sql: str, sampler: _CpuSampler) -> tuple[dict, str, Optional[str]]:
+    def _run_sql(self, sql: str, sampler: _CpuSampler,
+                 fetch_size: Optional[int] = None) -> tuple[dict, str, Optional[str]]:
         """执行一条 SQL → (metrics, execution_status, failure_reason)。metrics 只含实测值。"""
         metrics: dict = {}
         try:
-            session = self._open()
+            session = self._open(fetch_size=fetch_size)
         except Exception as exc:
             status, reason = classify_execution_error(exc)
             return {}, status, reason
@@ -195,9 +198,21 @@ class IoTDBExecutor:
             metrics["memory_utilization_peak"] = mem_peak
         return metrics, "success", None
 
-    def _execute_single(self, sql: str) -> tuple[dict, str, Optional[str]]:
+    def _execute_single(self, sql: str,
+                        fetch_size: Optional[int] = None) -> tuple[dict, str, Optional[str]]:
         """执行一条 SQL（独立采样）→ (metrics, execution_status, failure_reason)。"""
-        return self._run_sql(sql, _CpuSampler())
+        return self._run_sql(sql, _CpuSampler(), fetch_size=fetch_size)
+
+    @staticmethod
+    def _fetch_size_of(strategy: dict) -> Optional[int]:
+        """从策略参数提取 fetch_size（候选提供方生成的执行级参数）。"""
+        sp = (strategy or {}).get("strategy_parameters") or {}
+        if not isinstance(sp, dict):
+            return None
+        v = (sp.get("fetch_size") or {}).get("fetch_size")
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+            return int(v)
+        return None
 
     # ------------------------------------------------------------------
     def execute(self, query: str, query_id: str, strategy: dict) -> ExecutionResult:
@@ -205,11 +220,13 @@ class IoTDBExecutor:
 
         执行串行化（B2 并行下 Session 非线程安全；执行本身仅 ~30ms，
         锁开销可忽略——LLM 调用才是并行收益来源）。
+        策略参数 fetch_size 由候选提供方给出，此处按参数选择会话批次。
         """
         with self._exec_lock:
             sql = (strategy or {}).get("equivalent_sql")
             if not sql or not isinstance(sql, str):
                 sql = query   # 执行级策略：SQL 不变，由引擎按其能力执行
+            fetch_size = self._fetch_size_of(strategy)
 
             timestamp = int(time.time() * 1000)
 
@@ -220,7 +237,7 @@ class IoTDBExecutor:
                     baseline_metrics = b_metrics
                 # baseline 失败：不携带 baseline（监控 Agent 如实标记，不编造）
 
-            metrics, status, reason = self._execute_single(sql)
+            metrics, status, reason = self._execute_single(sql, fetch_size=fetch_size)
         return ExecutionResult(
             execution_status=status,
             failure_reason=reason,

@@ -1,8 +1,9 @@
-"""Optimization Decision Agent 单元测试。
+"""Optimization Decision Agent 单元测试（策略空间重设计后的目录）。
 
-覆盖：输入契约、有界策略空间、维度适用性、风险门控与回退、
-数据驱动的决策（选择率/分区信息/扫描估计）、历史证据相似度与加权、
-置信度不虚高、确定性、schema 契约、不越权声明。
+覆盖：输入契约、有界策略空间、维度适用性（对齐方式/结果批次）、
+数据驱动决策（设备数实测先验）、历史证据相似度与加权、
+置信度不虚高、确定性、schema 契约、不越权声明、
+混合模型（候选携带等价 SQL / 执行参数）。
 运行：pytest tests/test_optimization_decision_agent.py -v
 """
 
@@ -21,7 +22,16 @@ REQUIRED_TOP_KEYS = {
     "query_id", "decision", "selected_strategy", "evidence",
     "overall_confidence", "fallback_strategy", "decision_status",
 }
-REQUIRED_DIMS = ("time_pruning", "filter_order", "aggregation_placement")
+REQUIRED_DIMS = ("alignment", "fetch_size")
+
+MULTI_Q = ("SELECT s_0 FROM root.test.d_0, root.test.d_1 WHERE time >= 1640966405000 "
+           "AND time <= 1640970000000")
+SINGLE_Q = ("SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 "
+            "AND time <= 1640970000000")
+WIDE_Q = ("SELECT s_0 FROM root.test.d_0, root.test.d_1, root.test.d_2, "
+          "root.test.d_3, root.test.d_4, root.test.d_5, root.test.d_6, "
+          "root.test.d_7, root.test.d_8, root.test.d_9 WHERE time >= 1640966405000 "
+          "AND time <= 1640970000000")
 
 
 def _check_schema(r: dict) -> None:
@@ -78,155 +88,67 @@ def test_decision_requires_more_than_sql():
     assert r["decision_status"] == "invalid_input"
 
 
-def test_dimension_not_applicable():
-    # 无聚合、无非时间谓词的点查询：filter_order / aggregation_placement 不适用
-    r = _decide("SELECT s1 FROM root.sg1.d1 WHERE time = 1640966450000")
+def test_dimension_not_applicable_single_device():
+    # 单设备查询：对齐方式无差异 → alignment 不适用；fetch_size 恒适用
+    r = _decide(SINGLE_Q)
     _check_schema(r)
-    assert r["decision"]["time_pruning"]["strategy"] != "not_applicable"
-    assert r["decision"]["filter_order"]["strategy"] == "not_applicable"
-    assert r["decision"]["aggregation_placement"]["strategy"] == "not_applicable"
+    assert r["decision"]["alignment"]["strategy"] == "not_applicable"
+    assert r["decision"]["fetch_size"]["strategy"] == "fetch_large"
 
 
 # ---------------------------------------------------------------------------
-# Time Pruning 决策
+# Alignment 决策（实测先验：设备数驱动的方向）
 # ---------------------------------------------------------------------------
 
-def test_time_pruning_narrow_with_partition_info():
-    db = {"partition_info": {"total_partitions": 128, "covered_partitions": 2}}
-    r = _decide(
-        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 AND time <= 1640970000000",
-        database_state=db,
-    )
-    assert r["decision"]["time_pruning"]["strategy"] == "partition_pruning"
-    assert "partition_pruning" in r["selected_strategy"]["strategy_id"]
-    assert any("partition_info" in s for s in r["evidence"]["database_state"])
-    # 参数只包含事实性取值
-    params = r["selected_strategy"]["strategy_parameters"]
-    assert params["time_pruning"]["start_time"] == 1640966405000
+def test_wide_device_scan_prefers_time_aligned():
+    # 设备数 ≥10：实测默认对齐占优 15~25× → time_aligned
+    r = _decide(WIDE_Q)
+    assert r["decision"]["alignment"]["strategy"] == "time_aligned"
+    assert "设备数" in r["decision"]["alignment"]["reason"]
+    assert "alignment=time_aligned" in r["selected_strategy"]["strategy_id"]
 
 
-def test_time_pruning_cold_start_prefers_full_scan():
-    # wide 范围 + 无分区信息 + 无历史：partition_pruning 门控不通过 → full_scan
-    r = _decide("SELECT s1 FROM root.sg1.d1 WHERE time >= 0 AND time <= 4102444800000")
-    assert r["decision"]["time_pruning"]["strategy"] == "full_scan"
-    assert any("partition_pruning" in n for n in r["notes"])  # 排除记录可追踪
-
-
-def test_time_pruning_fallback_when_all_excluded():
-    # 候选只有 partition_pruning，wide 范围 + 无数据 → 全部排除 → 回退 baseline
-    r = _decide(
-        "SELECT s1 FROM root.sg1.d1 WHERE time >= 0 AND time <= 4102444800000",
-        candidate_strategies={"time_pruning": ["partition_pruning"],
-                              "filter_order": [], "aggregation_placement": []},
-    )
-    assert r["decision"]["time_pruning"]["strategy"] == "full_scan"  # 内置 baseline
-    assert r["decision"]["time_pruning"]["confidence"] == 0.3        # 回退置信度不虚高
-    assert "full_scan" in r["fallback_strategy"]
-
-
-def test_chunk_level_high_risk_gate_needs_history():
-    db = {"physical_organization": {"chunk_level": {"total_chunks": 1000, "covered_chunks": 5}}}
-    # 窄范围 + chunk 信息齐备，但无历史证据（高风险要求 ≥2 条）→ chunk 被门控排除
-    r = _decide(
-        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 AND time <= 1640970000000",
-        database_state=db,
-    )
-    assert r["decision"]["time_pruning"]["strategy"] != "chunk_level_filtering"
-    assert any("chunk_level_filtering" in n for n in r["notes"])
-
-
-def test_chunk_level_selected_with_history():
-    db = {"physical_organization": {"chunk_level": {"total_chunks": 1000, "covered_chunks": 5}}}
+def test_align_by_device_selected_with_history_evidence():
+    # 少量设备：结构先验仍偏 time_aligned；历史证据显示按设备对齐更快 → 翻盘
     history = [
-        _record("h1", "range_query", 25000, "narrow",
-                strategy={"time_pruning": "chunk_level_filtering"}, latency=5.0, db=db),
-        _record("h2", "range_query", 30000, "narrow",
-                strategy={"time_pruning": "chunk_level_filtering"}, latency=6.0, db=db),
-        _record("h3", "range_query", 25000, "narrow",
-                strategy={"time_pruning": "full_scan"}, latency=50.0, db=db),
+        _record("h1", "range_query", 25000, "narrow", device_count=2,
+                strategy={"alignment": "align_by_device"}, latency=3.0),
+        _record("h2", "range_query", 30000, "narrow", device_count=2,
+                strategy={"alignment": "align_by_device"}, latency=4.0),
+        _record("h3", "range_query", 25000, "narrow", device_count=2,
+                strategy={"alignment": "time_aligned"}, latency=20.0),
     ]
-    r = _decide(
-        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 AND time <= 1640970000000",
-        database_state=db, historical_records=history,
-    )
-    assert r["decision"]["time_pruning"]["strategy"] == "chunk_level_filtering"
-    assert r["decision"]["time_pruning"]["confidence"] <= 0.7  # 高风险置信度上限
-    assert "历史证据" in r["decision"]["time_pruning"]["reason"]
-
-
-# ---------------------------------------------------------------------------
-# Filter Order 决策
-# ---------------------------------------------------------------------------
-
-def test_filter_order_no_data_prefers_time_first():
-    # 无选择率数据：不得假设某条件选择性更高 → device_tag_first 门控不通过 → time_first
-    r = _decide(
-        "SELECT s_1666 FROM root.db800.g_0.d_0 WHERE time >= 1640966400000 "
-        "AND time <= 1640966650000 AND root.db800.g_0.d_0.s_1666 > -5 "
-        "AND root.db800.g_0.d_0.s_1766 > -5"
-    )
-    assert r["decision"]["filter_order"]["strategy"] == "time_first"
-    assert any("device_tag_first" in n for n in r["notes"])
-
-
-def test_filter_order_with_selectivity_prefers_device_tag():
-    db = {"statistics": {"selectivity": {
-        "time": 0.4, "root.db800.g_0.d_0.s_1666": 0.02, "root.db800.g_0.d_0.s_1766": 0.05,
-    }}}
-    r = _decide(
-        "SELECT s_1666 FROM root.db800.g_0.d_0 WHERE time >= 1640966400000 "
-        "AND time <= 1640966650000 AND root.db800.g_0.d_0.s_1666 > -5 "
-        "AND root.db800.g_0.d_0.s_1766 > -5",
-        database_state=db,
-    )
-    assert r["decision"]["filter_order"]["strategy"] == "device_tag_first"
-    assert "选择率" in r["decision"]["filter_order"]["reason"]
+    r = _decide(MULTI_Q, historical_records=history)
+    assert r["decision"]["alignment"]["strategy"] == "align_by_device"
+    assert "历史证据" in r["decision"]["alignment"]["reason"]
 
 
 def test_unknown_candidate_names_rejected():
     r = _decide(
-        "SELECT s1 FROM root.sg1.d1 WHERE time >= 1 AND time <= 2 AND s1 > 10 AND t1 = 'v'",
-        candidate_strategies={"time_pruning": ["magic_strategy", "full_scan"],
-                              "filter_order": ["time_first"],
-                              "aggregation_placement": []},
+        MULTI_Q,
+        candidate_strategies={"alignment": ["magic_strategy", "time_aligned"],
+                              "fetch_size": ["fetch_large"]},
     )
     assert "magic_strategy" not in r["selected_strategy"]["strategy_id"]
     assert any("magic_strategy" in n for n in r["notes"])
 
 
 # ---------------------------------------------------------------------------
-# Aggregation Placement 决策
+# Fetch Size 决策（实测 ~15-20% 收益 → fetch_large 结构性占优）
 # ---------------------------------------------------------------------------
 
-def test_scan_level_gate_without_support():
-    # 无窄范围/扫描估计/窗口 → scan_level 门控不通过；无 GROUP BY → intermediate 也不通过
-    r = _decide(
-        "SELECT COUNT(s_0) FROM root.test.d_0 WHERE time >= 0 AND time <= 4102444800000",
-        candidate_strategies={"aggregation_placement": ["scan_level_aggregation",
-                                                         "intermediate_level_aggregation",
-                                                         "final_level_aggregation"]},
-    )
-    assert r["decision"]["aggregation_placement"]["strategy"] == "final_level_aggregation"
-    assert any("scan_level_aggregation" in n for n in r["notes"])
+def test_fetch_large_chosen_by_default():
+    r = _decide(SINGLE_Q)
+    assert r["decision"]["fetch_size"]["strategy"] == "fetch_large"
+    assert "fetch_size=fetch_large" in r["selected_strategy"]["strategy_id"]
 
 
-def test_scan_level_selected_narrow_window():
-    r = _decide(
-        "SELECT AVG(s_0) FROM root.test.d_0 "
-        "GROUP BY ([1640966405000, 1640976405000), 1h)"
-    )
-    assert r["decision"]["aggregation_placement"]["strategy"] == "scan_level_aggregation"
-    assert "窗口聚合" in r["decision"]["aggregation_placement"]["reason"]
-
-
-def test_intermediate_level_selected_with_group_by():
-    # GROUP BY（非窗口）→ intermediate 有结构依据；scan_level 无支撑 → intermediate 胜出
-    r = _decide(
-        "SELECT COUNT(s1) FROM root.sg1.d1 GROUP BY LEVEL = 1",
-        candidate_strategies={"aggregation_placement": ["intermediate_level_aggregation",
-                                                         "final_level_aggregation"]},
-    )
-    assert r["decision"]["aggregation_placement"]["strategy"] == "intermediate_level_aggregation"
+def test_fetch_candidate_restriction_respected():
+    # 候选只有 fetch_default → 只选它（有界策略空间）
+    r = _decide(SINGLE_Q,
+                candidate_strategies={"alignment": [],
+                                      "fetch_size": ["fetch_default"]})
+    assert r["decision"]["fetch_size"]["strategy"] == "fetch_default"
 
 
 # ---------------------------------------------------------------------------
@@ -237,31 +159,25 @@ def test_history_similarity_filters_dissimilar_records():
     history = [
         _record("dissimilar", "window_aggregation_query", 3_600_000_000, "wide",
                 has_agg=True, has_group_by=True, has_window=True,
-                strategy={"time_pruning": "partition_pruning"}, latency=1.0),  # 完全不同上下文
+                strategy={"alignment": "time_aligned"}, latency=1.0),
     ]
-    r = _decide(
-        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 AND time <= 1640970000000",
-        historical_records=history,
-    )
+    r = _decide(WIDE_Q, historical_records=history)
     used = [h for h in r["evidence"]["historical_records"] if h.get("record_id")]
     assert used == []  # 相似度低于阈值 → 不参与
-    summary = next(h["summary"] for h in r["evidence"]["historical_records"] if "summary" in h)
+    summary = next(h["summary"] for h in r["evidence"]["historical_records"]
+                   if "summary" in h)
     assert summary["below_similarity_threshold"] == 1
 
 
 def test_history_evidence_boosts_matching_strategy():
     history = [
-        _record("h1", "range_query", 25000, "narrow",
-                strategy={"time_pruning": "partition_pruning"}, latency=10.0),
-        _record("h2", "range_query", 30000, "narrow",
-                strategy={"time_pruning": "full_scan"}, latency=80.0),
+        _record("h1", "range_query", 25000, "narrow", device_count=10,
+                strategy={"alignment": "time_aligned"}, latency=3.0),
+        _record("h2", "range_query", 30000, "narrow", device_count=10,
+                strategy={"alignment": "align_by_device"}, latency=80.0),
     ]
-    # wide 范围（无 narrow 上下文加分），但历史证据 ≥1 条 → 门控通过
-    r = _decide(
-        "SELECT s1 FROM root.sg1.d1 WHERE time >= 0 AND time <= 4102444800000",
-        historical_records=history,
-    )
-    assert r["decision"]["time_pruning"]["strategy"] == "partition_pruning"
+    r = _decide(WIDE_Q, historical_records=history)
+    assert r["decision"]["alignment"]["strategy"] == "time_aligned"
     assert any(h["record_id"] == "h1" for h in r["evidence"]["historical_records"]
                if h.get("record_id"))
 
@@ -272,11 +188,9 @@ def test_invalid_history_records_ignored():
         {"record_id": "bad2", "query_features": {}, "strategy": {},
          "execution_feedback": {"latency_ms": "fast"}},  # 非数值延迟
     ]
-    r = _decide(
-        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 AND time <= 1640970000000",
-        historical_records=history,
-    )
-    summary = next(h["summary"] for h in r["evidence"]["historical_records"] if "summary" in h)
+    r = _decide(WIDE_Q, historical_records=history)
+    summary = next(h["summary"] for h in r["evidence"]["historical_records"]
+                   if "summary" in h)
     assert summary["invalid"] == 2
 
 
@@ -285,45 +199,30 @@ def test_invalid_history_records_ignored():
 # ---------------------------------------------------------------------------
 
 def test_confidence_not_inflated_without_evidence():
-    r = _decide("SELECT s1 FROM root.sg1.d1 WHERE time >= 0 AND time <= 4102444800000")
+    r = _decide(WIDE_Q)
     assert r["overall_confidence"] <= 0.6  # 无数据库状态、无历史 → 上限 0.6
-    assert r["decision"]["time_pruning"]["confidence"] <= 0.6
 
 
 def test_confidence_higher_with_evidence():
-    db = {"partition_info": {"total_partitions": 128, "covered_partitions": 2}}
-    r_none = _decide(
-        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 AND time <= 1640970000000"
-    )
-    r_rich = _decide(
-        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 AND time <= 1640970000000",
-        database_state=db,
-        historical_records=[
-            _record("h1", "range_query", 25000, "narrow",
-                    strategy={"time_pruning": "partition_pruning"}, latency=8.0, db=db),
-        ],
-    )
-    assert r_rich["decision"]["time_pruning"]["confidence"] >= \
-        r_none["decision"]["time_pruning"]["confidence"]
+    r_none = _decide(WIDE_Q)
+    r_rich = _decide(WIDE_Q, historical_records=[
+        _record("h1", "range_query", 25000, "narrow", device_count=10,
+                strategy={"alignment": "time_aligned"}, latency=8.0),
+    ])
+    assert r_rich["decision"]["alignment"]["confidence"] >= \
+        r_none["decision"]["alignment"]["confidence"]
 
 
-def test_system_state_high_load_adjusts_scores():
-    r = _decide(
-        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 AND time <= 1640970000000",
-        system_state={"cpu_utilization": 0.9, "memory_utilization": 0.5,
-                      "io_utilization": 0.85},
-    )
-    assert r["decision"]["time_pruning"]["strategy"] == "partition_pruning"
-    assert "高负载" in r["decision"]["time_pruning"]["reason"]
+def test_system_state_recorded_in_evidence():
+    # 负载状态进入证据（新目录暂无负载交互加分——诚实：不编造调整依据）
+    r = _decide(WIDE_Q, system_state={"cpu_utilization": 0.9,
+                                      "memory_utilization": 0.5,
+                                      "io_utilization": 0.85})
     assert any("load_level=high" in s for s in r["evidence"]["system_state"])
 
 
 def test_no_optimality_claims():
-    queries = [
-        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 AND time <= 1640970000000",
-        "SELECT AVG(s_0) FROM root.test.d_0 GROUP BY ([0, 1000000), 1h)",
-        "SELECT s1 FROM root.sg1.d1 WHERE s1 > 10 AND t1 = 'v'",
-    ]
+    queries = [SINGLE_Q, MULTI_Q, WIDE_Q]
     for q in queries:
         r = _decide(q)
         for d in REQUIRED_DIMS:
@@ -333,110 +232,95 @@ def test_no_optimality_claims():
 
 
 # ---------------------------------------------------------------------------
-# 混合模型：候选携带等价 SQL，决策输出可直接执行的 SQL
+# 混合模型：候选携带等价 SQL / 执行参数，决策输出可直接执行
 # ---------------------------------------------------------------------------
 
-def test_candidate_carries_equivalent_sql():
-    reordered = (
-        "SELECT s_1666 FROM root.db800.g_0.d_0 WHERE time >= 1640966400000 "
-        "AND time <= 1640966650000 AND root.db800.g_0.d_0.s_1666 > -5 "
-        "AND root.db800.g_0.d_0.s_1766 > -5"
-    )
+def test_align_candidate_carries_equivalent_sql():
+    # 候选提供方给出 ALIGN BY DEVICE 等价 SQL；历史证据使 align_by_device 胜出
+    aligned_sql = MULTI_Q + " ALIGN BY DEVICE"
+    history = [
+        _record("h1", "range_query", 25000, "narrow", device_count=2,
+                strategy={"alignment": "align_by_device"}, latency=2.0),
+        _record("h2", "range_query", 30000, "narrow", device_count=2,
+                strategy={"alignment": "align_by_device"}, latency=3.0),
+    ]
     r = _decide(
-        "SELECT s_1666 FROM root.db800.g_0.d_0 "
-        "WHERE root.db800.g_0.d_0.s_1666 > -5 AND root.db800.g_0.d_0.s_1766 > -5 "
-        "AND time >= 1640966400000 AND time <= 1640966650000",
+        MULTI_Q,
+        historical_records=history,
         candidate_strategies={
-            "filter_order": [
-                {"strategy": "time_first", "equivalent_sql": reordered},
-                {"strategy": "device_tag_first"},
+            "alignment": [
+                {"strategy": "time_aligned"},
+                {"strategy": "align_by_device", "equivalent_sql": aligned_sql},
             ],
-            "time_pruning": ["full_scan", "partition_pruning"],
-            "aggregation_placement": [],
+            "fetch_size": ["fetch_large"],
         },
     )
-    assert r["decision"]["filter_order"]["strategy"] == "time_first"
-    assert r["decision"]["filter_order"]["equivalent_sql"] == reordered
+    assert r["decision"]["alignment"]["strategy"] == "align_by_device"
+    assert r["decision"]["alignment"]["equivalent_sql"] == aligned_sql
     # 唯一 SQL 维度 → 组合结果即该 SQL，可直接交给执行层
-    assert r["selected_strategy"]["equivalent_sql"] == reordered
+    assert r["selected_strategy"]["equivalent_sql"] == aligned_sql
 
 
 def test_no_sql_candidate_returns_original_query():
-    # 全部为执行级策略（裁剪/聚合位置）→ 等价 SQL 为原查询文本
-    r = _decide("SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 "
-                "AND time <= 1640970000000")
-    assert r["selected_strategy"]["equivalent_sql"] == (
-        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 "
-        "AND time <= 1640970000000"
-    )
+    # 全部无 SQL（默认候选）→ 组合结果为原查询文本
+    r = _decide(SINGLE_Q)
+    assert r["selected_strategy"]["equivalent_sql"] == SINGLE_Q
 
 
 def test_multiple_sql_dimensions_not_composed():
-    # 两个维度都提供 SQL（按维度独立生成）→ 不冒险组合，置 null
+    # 两个维度都提供 SQL（人为构造）→ 不冒险组合，置 null；维度级仍各自给出
     r = _decide(
-        "SELECT s_1 FROM root.sg1.d1 WHERE s1 > 10 AND t1 = 'v' "
-        "AND time >= 1 AND time <= 2",
+        MULTI_Q,
         candidate_strategies={
-            "time_pruning": [
-                {"strategy": "full_scan",
-                 "equivalent_sql": "SELECT s_1 FROM root.sg1.d1 WHERE time >= 1 AND time <= 2 AND s1 > 10 AND t1 = 'v'"},
+            "alignment": [
+                {"strategy": "time_aligned",
+                 "equivalent_sql": MULTI_Q + " ALIGN BY TIME"},
             ],
-            "filter_order": [
-                {"strategy": "time_first",
-                 "equivalent_sql": "SELECT s_1 FROM root.sg1.d1 WHERE time >= 1 AND time <= 2 AND s1 > 10 AND t1 = 'v'"},
+            "fetch_size": [
+                {"strategy": "fetch_large",
+                 "equivalent_sql": MULTI_Q + " LIMIT 100"},
             ],
-            "aggregation_placement": [],
         },
     )
     assert r["selected_strategy"]["equivalent_sql"] is None
-    assert r["decision"]["filter_order"]["equivalent_sql"] is not None  # 维度级仍各自给出
 
 
 def test_candidate_parameters_passed_through():
+    # fetch_large 的执行级参数（候选提供方生成）原样透传
     r = _decide(
-        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 "
-        "AND time <= 1640970000000",
+        SINGLE_Q,
         candidate_strategies={
-            "time_pruning": [
-                {"strategy": "partition_pruning",
-                 "parameters": {"hint": "partition_scan"}},
+            "fetch_size": [
+                {"strategy": "fetch_large", "parameters": {"fetch_size": 10000}},
             ],
-            "filter_order": [], "aggregation_placement": [],
+            "alignment": [],
         },
     )
     params = r["selected_strategy"]["strategy_parameters"]
-    assert params["time_pruning"]["hint"] == "partition_scan"
-    assert params["time_pruning"]["start_time"] == 1640966405000  # 事实性参数仍保留
+    assert params["fetch_size"]["fetch_size"] == 10000
 
 
 def test_plain_name_candidates_backward_compatible():
     # 纯名称候选（旧格式）仍可用，equivalent_sql 为 null
-    r = _decide(
-        "SELECT s_1666 FROM root.db800.g_0.d_0 WHERE time >= 1640966400000 "
-        "AND time <= 1640966650000 AND root.db800.g_0.d_0.s_1666 > -5 "
-        "AND root.db800.g_0.d_0.s_1766 > -5",
-        candidate_strategies={"filter_order": ["time_first", "device_tag_first"],
-                              "time_pruning": ["full_scan"],
-                              "aggregation_placement": []},
-    )
-    assert r["decision"]["filter_order"]["strategy"] == "time_first"
-    assert r["decision"]["filter_order"]["equivalent_sql"] is None
-    # 无 SQL 候选 → 组合结果为原查询文本
-    assert r["selected_strategy"]["equivalent_sql"].startswith("SELECT s_1666")
+    r = _decide(MULTI_Q,
+                candidate_strategies={"alignment": ["time_aligned", "align_by_device"],
+                                      "fetch_size": ["fetch_default"]})
+    assert r["decision"]["alignment"]["strategy"] == "time_aligned"
+    assert r["decision"]["alignment"]["equivalent_sql"] is None
+    assert r["selected_strategy"]["equivalent_sql"] == MULTI_Q
 
 
 def test_invalid_equivalent_sql_ignored():
     r = _decide(
-        "SELECT s_1 FROM root.sg1.d1 WHERE s1 > 10 AND t1 = 'v'",
+        SINGLE_Q,
         candidate_strategies={
-            "filter_order": [
-                {"strategy": "time_first", "equivalent_sql": ""},   # 空串无效
-                "device_tag_first",
+            "fetch_size": [
+                {"strategy": "fetch_large", "equivalent_sql": ""},   # 空串无效
             ],
-            "time_pruning": [], "aggregation_placement": [],
+            "alignment": [],
         },
     )
-    assert r["decision"]["filter_order"]["equivalent_sql"] is None
+    assert r["decision"]["fetch_size"]["equivalent_sql"] is None
     assert any("equivalent_sql" in n for n in r["notes"])
 
 
@@ -445,46 +329,32 @@ def test_invalid_equivalent_sql_ignored():
 # ---------------------------------------------------------------------------
 
 def test_determinism():
-    q = "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 AND time <= 1640970000000"
     inp = {
-        "query_analysis": analyze(q, query_id="x"),
-        "database_state": {"partition_info": {"total_partitions": 128, "covered_partitions": 2}},
+        "query_analysis": analyze(WIDE_Q, query_id="x"),
         "historical_records": [
-            _record("h1", "range_query", 25000, "narrow",
-                    strategy={"time_pruning": "partition_pruning"}, latency=8.0),
+            _record("h1", "range_query", 25000, "narrow", device_count=10,
+                    strategy={"alignment": "time_aligned"}, latency=8.0),
         ],
     }
     assert decide(inp) == decide(inp)
 
 
 def test_flat_candidate_list():
-    r = _decide(
-        "SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 AND time <= 1640970000000",
-        candidate_strategies=["full_scan", "partition_pruning"],
-    )
-    assert r["decision"]["time_pruning"]["strategy"] in ("full_scan", "partition_pruning")
+    r = _decide(WIDE_Q, candidate_strategies=["time_aligned", "align_by_device"])
+    assert r["decision"]["alignment"]["strategy"] in ("time_aligned", "align_by_device")
 
 
 def test_invalid_baseline_falls_back_to_default():
     r = _decide(
-        "SELECT s1 FROM root.sg1.d1 WHERE time >= 0 AND time <= 4102444800000",
-        candidate_strategies={"time_pruning": ["partition_pruning"],
-                              "filter_order": [], "aggregation_placement": []},
-        baseline_strategy={"time_pruning": "not_a_strategy"},
+        WIDE_Q,
+        candidate_strategies={"alignment": ["align_by_device"],
+                              "fetch_size": ["fetch_default"]},
+        baseline_strategy={"alignment": "not_a_strategy",
+                           "fetch_size": "not_a_strategy"},
     )
-    assert r["decision"]["time_pruning"]["strategy"] == "full_scan"
     assert any("baseline" in n for n in r["notes"])
 
 
-def test_partial_fallback_status():
-    # 时间维度回退、过滤维度成功 → partial_fallback
-    r = _decide(
-        "SELECT s1 FROM root.sg1.d1 WHERE time >= 0 AND time <= 4102444800000 "
-        "AND s1 > 10 AND s2 < 20",
-        candidate_strategies={"time_pruning": ["partition_pruning"],
-                              "filter_order": ["time_first"],
-                              "aggregation_placement": []},
-    )
-    assert r["decision_status"] == "partial_fallback"
-    assert r["decision"]["filter_order"]["strategy"] == "time_first"
-    assert "time_pruning=full_scan" in r["fallback_strategy"]
+def test_decision_status_success():
+    r = _decide(WIDE_Q)
+    assert r["decision_status"] == "success"

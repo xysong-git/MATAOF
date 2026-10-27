@@ -135,7 +135,7 @@ def test_async_keeps_deterministic_core(tmp_path):
     runner = _runner(tmp_path, llm)
     t = runner.run_query(NARROW_Q, query_id="q1")
     # 主链路立即返回确定性结果（不等 LLM）
-    assert t["decision"]["decision"]["time_pruning"]["strategy"] == "partition_pruning"
+    assert t["decision"]["decision"]["fetch_size"]["strategy"] == "fetch_large"
     assert t["monitoring"]["execution_status"] == "unknown"   # NullExecutor，事实不变
     runner.wait_llm_tasks()
 
@@ -222,9 +222,9 @@ def test_decision_mode_llm_primary_wiring(tmp_path, monkeypatch):
         def chat(self, messages, max_tokens=2048, timeout_s=60.0):
             self.calls += 1
             return json.dumps({"decisions": {
-                "time_pruning": "full_scan", "filter_order": None,
-                "aggregation_placement": None},
-                "reasons": {"time_pruning": "保守选择全表扫描"}}, ensure_ascii=False)
+                "alignment": None,
+                "fetch_size": "fetch_default"},
+                "reasons": {"fetch_size": "保守选择默认批次"}}, ensure_ascii=False)
 
     fake = DecideLLM()
     monkeypatch.setattr(runner_mod, "build_llm_client", lambda cfg: fake)
@@ -240,8 +240,8 @@ def test_decision_mode_llm_primary_wiring(tmp_path, monkeypatch):
 
     trace = runner.run_query(NARROW_Q, query_id="dm1")
     assert fake.calls == 1                     # 每条查询恰好 1 次（决策）
-    assert trace["decision"]["decision"]["time_pruning"]["strategy"] == "full_scan"
-    assert "llm_selected" in trace["decision"]["decision"]["time_pruning"]["reason"]
+    assert trace["decision"]["decision"]["fetch_size"]["strategy"] == "fetch_default"
+    assert "llm_selected" in trace["decision"]["decision"]["fetch_size"]["reason"]
     assert any("llm_selected" in n for n in trace["decision"]["notes"])
     assert trace["analysis"]["llm_analysis"]["available"] is False   # QA 解读关闭
 

@@ -102,7 +102,7 @@ def test_equivalent_sql_preferred():
         "equivalent_sql": "SELECT s_0 FROM root.test.g_0.d_0 WHERE time >= 1 ORDER BY time",
     }
     ex.execute("SELECT s_0 FROM root.test.g_0.d_0 LIMIT 3", "q1", strategy)
-    assert ex._session.executed == [strategy["equivalent_sql"]]   # 执行的是等价 SQL
+    assert ex._sessions[1024].executed == [strategy["equivalent_sql"]]   # 执行的是等价 SQL
     ex.close()
 
 
@@ -110,7 +110,7 @@ def test_null_equivalent_sql_runs_original():
     ex = _make_executor()
     original = "SELECT s_0 FROM root.test.g_0.d_0 LIMIT 3"
     ex.execute(original, "q1", {"strategy_id": "x", "equivalent_sql": None})
-    assert ex._session.executed == [original]
+    assert ex._sessions[1024].executed == [original]
     ex.close()
 
 
@@ -121,7 +121,7 @@ def test_baseline_measured_from_original_query():
                 "equivalent_sql": "SELECT s_0 FROM root.test.g_0.d_0 LIMIT 3"}
     r = ex.execute(original, "q1", strategy)
     # 先执行 baseline（原查询），再执行策略 SQL
-    assert ex._session.executed == [original, strategy["equivalent_sql"]]
+    assert ex._sessions[1024].executed == [original, strategy["equivalent_sql"]]
     assert r.baseline_metrics is not None
     assert "response_time_ms" in r.baseline_metrics
     ex.close()

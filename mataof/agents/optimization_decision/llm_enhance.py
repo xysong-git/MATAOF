@@ -29,7 +29,7 @@ SYSTEM_PROMPT = (
 )
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
-DIMENSIONS = ("time_pruning", "filter_order", "aggregation_placement")
+DIMENSIONS = ("alignment", "fetch_size")
 
 
 def _context_summary(decision_input: dict) -> dict:
