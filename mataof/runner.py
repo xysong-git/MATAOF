@@ -27,12 +27,14 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from mataof.agents.query_analysis import analyze
-from mataof.agents.optimization_decision import decide
+from mataof.agents.optimization_decision import decide, run_agent
 from mataof.agents.execution_monitoring import monitor
 from mataof.agents.knowledge_memory import KnowledgeMemoryAgent
 from mataof.executors import build_executor
 from mataof.executors.base import ExecutionResult, Executor
 from mataof.llm import build_llm_client
+from mataof.similarity import (baseline_sample_adequate, build_history_evidence,
+                               compact_features, same_shape_evidence)
 
 
 def split_sql_statements(text: str) -> list[str]:
@@ -72,6 +74,222 @@ def sample_items(items: list, limit: Optional[int], mode: str,
     return items[: int(limit)], info
 
 
+def load_device_inventory(data: Any = None,
+                          path: Optional[str] = None) -> Any:
+    """设备清单加载（通配 FROM 展开用）；无效输入 → None（计划生成安全降级）。
+
+    契约：list[str]（全局清单）或 dict[str, list[str]]（通配模式 → 清单）。
+    文件读取失败不抛异常——设备分区计划不生成，其余计划照常工作。
+    """
+    inv = data
+    if inv is None and path:
+        try:
+            with open(path, encoding="utf-8") as f:
+                inv = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[runner] 注意：设备清单读取失败（{path}）：{exc}；"
+                  f"通配查询不生成设备分区计划", flush=True)
+            return None
+    if inv is None:
+        return None
+    if isinstance(inv, dict):
+        if all(isinstance(v, list) and all(isinstance(x, str) for x in v)
+               for v in inv.values()):
+            return {str(k): list(v) for k, v in inv.items()}
+    elif isinstance(inv, list) and all(isinstance(x, str) for x in inv):
+        return list(inv)
+    print("[runner] 注意：设备清单格式无效（需 list[str] 或 dict[str, list[str]]）；"
+          "通配查询不生成设备分区计划", flush=True)
+    return None
+
+
+def validate_device_inventory(inventory: Any,
+                              count_devices: Any = None) -> tuple[Any, list[str]]:
+    """用数据库真实设备数校验通配清单；不完整/无法校验的模式剔除。
+
+    设备分区按清单展开子查询，清单缺设备会在合并结果里静默丢列
+    （verify_merged 只按计划自身校验，发现不了），因此使用前必须核对
+    COUNT DEVICES <pattern> 与清单长度：
+    - 非 dict（全局 list）无法按模式核对 → 原样返回并说明；
+    - 某个模式数量不一致/查询失败 → 仅剔除该模式（其余模式继续可用）；
+    - 全部剔除 → None（设备/混合分区计划不生成，其余计划照常）。
+    """
+    notes: list[str] = []
+    if not isinstance(inventory, dict):
+        if inventory is not None:
+            notes.append("清单不是 dict[pattern, list] 形式，无法按模式核对设备数；保持原样")
+        return inventory, notes
+    if not callable(count_devices):
+        notes.append("执行器不支持设备数校验；保持原样")
+        return inventory, notes
+    kept: dict = {}
+    for pattern, devices in inventory.items():
+        try:
+            n = count_devices(pattern)
+        except Exception as exc:
+            notes.append(f"{pattern}：校验查询失败（{type(exc).__name__}: "
+                         f"{str(exc)[:160]}）；剔除该清单")
+            continue
+        if n is None:
+            notes.append(f"{pattern}：数据库未返回设备数；剔除该清单")
+            continue
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            notes.append(f"{pattern}：设备数不是整数（{n!r}）；剔除该清单")
+            continue
+        if n != len(devices):
+            notes.append(f"{pattern}：清单 {len(devices)} 台 ≠ 数据库 {n} 台；"
+                         f"剔除该清单（避免设备分区丢数据）")
+            continue
+        kept[pattern] = devices
+    if inventory and not kept:
+        notes.append("所有通配模式均未通过校验；本次运行不生成设备/混合分区计划")
+    return (kept or None), notes
+
+
+_BASELINE_PLAN_ID = "baseline_single_df"
+
+# baseline 样本充分性口径见 mataof.similarity.baseline_sample_adequate
+# （与决策成本模型共用）：少于 3 次或不足同计划证据的 10% → 不充分，
+# 改用同计划（同查询形状 + 同执行计划）的实测历史。
+
+
+def _plan_reference(ev: Any, plan_id: str, source: str,
+                    scope: str = "similar_records") -> Optional[dict]:
+    """从历史证据中取某计划的加权实测延迟；无有效样本 → None。"""
+    lat = ev.weighted_latency("plan", plan_id)
+    count = ev.count_for("plan", plan_id)
+    if lat is None or lat <= 0 or count <= 0:
+        return None
+    return {
+        "response_time_ms": round(float(lat), 3),
+        "source": source,
+        "plan_id": plan_id,
+        "count": count,
+        "scope": scope,
+    }
+
+
+def build_historical_reference(decision: Any, historical_records: Any,
+                               reference_time: Optional[int] = None,
+                               query_analysis: Optional[dict] = None,
+                               database_state: Optional[dict] = None
+                               ) -> Optional[dict]:
+    """构造执行监控的历史参照（只取历史实测延迟，不使用成本先验）。
+
+    优先使用 baseline 计划历史（衡量相对原查询的优化收益），但 baseline
+    样本可能因选择性执行而稀少、偏冷启动。规则：
+    1. baseline 样本充分（≥3 次且 ≥ 同查询形状全部计划证据的 10%）
+       → baseline 历史，无论所选计划是什么；
+    2. baseline 不充分/缺失，且所选计划有同计划历史
+       → 同计划历史（同查询形状、同计划，口径一致且样本更密）；
+    3. 否则 → 任意相似计划的加权实测延迟（典型表现）；
+    4. 无任何实测延迟 → None（保持 insufficient_evidence，绝不编造参照值）。
+
+    提供 query_analysis 时，若"同查询形状 + 同数据规模"的实测历史充分
+    （≥3 次），参照只在该子集内构造——近邻形状（q3/q10 测点不同、
+    q7/q11 窗口不同）的延迟不参与，避免参照被近邻形状稀释。
+
+    返回字段：response_time_ms / source / plan_id / count / scope
+    （source、scope 仅供追踪审计）。
+    """
+    dec = decision if isinstance(decision, dict) else {}
+    ps = dec.get("plan_selection")
+    ps = ps if isinstance(ps, dict) else {}
+    baseline_plan_id = str(ps.get("baseline_plan_id") or _BASELINE_PLAN_ID)
+    ss = dec.get("selected_strategy")
+    plan = (ss or {}).get("execution_plan") if isinstance(ss, dict) else None
+    selected_plan_id = plan.get("plan_id") if isinstance(plan, dict) else None
+
+    records = historical_records if isinstance(historical_records, list) else []
+    current_compact = (compact_features(query_analysis)
+                       if isinstance(query_analysis, dict) else {})
+    ev = None
+    if records:
+        # 与决策 Agent 使用同一套相似度/时效权重（记录自带预算相似度时直接复用）。
+        ev = build_history_evidence(records, current_compact, database_state or {},
+                                    {}, reference_time)
+        if not ev.used:
+            ev = None
+
+    scope = "similar_records"
+    if ev is not None and current_compact:
+        same_ev = same_shape_evidence(ev, current_compact,
+                                      database_state or {})
+        if same_ev is not None:
+            ev = same_ev
+            scope = "same_shape"
+
+    # baseline 参照：优先决策成本模型中的历史基线值（与决策预测同源），
+    # 否则取相似历史中 baseline 计划的加权实测延迟。
+    baseline_ref = None
+    single_ms = ps.get("single_ms")
+    if (ps.get("single_source") == "history_baseline"
+            and isinstance(single_ms, (int, float))
+            and not isinstance(single_ms, bool) and single_ms > 0):
+        count = 0
+        for e in ps.get("evaluations") or []:
+            if isinstance(e, dict) and e.get("plan_id") == baseline_plan_id:
+                count = int(e.get("history_count") or 0)
+                break
+        if count <= 0 and ev is not None:
+            count = ev.count_for("plan", baseline_plan_id)
+        baseline_ref = {
+            "response_time_ms": round(float(single_ms), 3),
+            "source": "history_baseline",
+            "plan_id": baseline_plan_id,
+            "count": count,
+            "scope": scope,
+        }
+    elif ev is not None:
+        baseline_ref = _plan_reference(ev, baseline_plan_id,
+                                       "history_baseline_records", scope)
+
+    same_ref = None
+    if (ev is not None and selected_plan_id
+            and str(selected_plan_id) != baseline_plan_id):
+        same_ref = _plan_reference(ev, str(selected_plan_id),
+                                   "history_same_plan", scope)
+
+    # baseline 样本是否充分按"同查询形状全部计划证据"衡量（与决策成本模型
+    # 同一口径），而不是只看同计划条数：baseline 是安全动作，样本稀少时
+    # 无论所选计划是什么，都不能拿冷启动值当参照。
+    total = ev.total_count("plan") if ev is not None else 0
+    b_count = int(baseline_ref.get("count") or 0) if baseline_ref else 0
+    baseline_ok = (baseline_ref is not None
+                   and baseline_sample_adequate(b_count, total))
+    if same_ref is not None:
+        if baseline_ref is None:
+            return same_ref
+        return baseline_ref if baseline_ok else same_ref
+    if baseline_ok:
+        return baseline_ref
+    if ev is None:
+        return None
+
+    items: list[tuple[float, float]] = []
+    count = 0
+    for u in ev.used:
+        fb = u["record"].get("execution_feedback") or {}
+        lat = fb.get("latency_ms")
+        if (isinstance(lat, (int, float)) and not isinstance(lat, bool)
+                and lat >= 0):
+            items.append((u["weight"] * u["count"], float(lat)))
+            count += u["count"]
+    total_w = sum(w for w, _ in items)
+    if not items or total_w <= 0:
+        return None
+    weighted = sum(w * lat for w, lat in items) / total_w
+    return {
+        "response_time_ms": round(weighted, 3),
+        "source": "history_matched",
+        "plan_id": None,
+        "count": count,
+        "scope": scope,
+    }
+
+
 @dataclass
 class RunnerConfig:
     """PipelineRunner 配置。所有字段可缺省（安全默认）。"""
@@ -97,6 +315,18 @@ class RunnerConfig:
     fixed_strategy: Optional[dict] = None       # D3：固定策略对照（非空 → 跳过决策 Agent）
     knowledge_save_interval: int = 1            # B5：知识库批量落盘间隔（大库实验建议 20~50）
     async_drain_timeout: float = 0.0            # B4：异步补写排空超时（0=不等待；>0 最多等 N 秒）
+    # 执行计划（决策 Agent 内置能力）：Agent 按查询编译可执行计划并做
+    # 成本/收益选择，把选中计划交给执行器。这里只配置事实输入与上限。
+    device_inventory: Any = None                # 通配设备展开清单（list[str] 或 dict[pattern, list]）
+    device_inventory_file: Optional[str] = None # 从 JSON 文件加载设备清单（device_inventory 优先）
+    planning: dict = field(default_factory=dict)  # 决策 Agent 计划生成配置（enabled 等）
+    # Agent 闭环（默认关闭）：决策 → 执行 → 观察 →（退化时）重规划。
+    # {"enabled": true, "max_attempts": 2, "deadline_ms": 30000,
+    #  "replan_on": ["degraded", "failed"]}
+    agent: dict = field(default_factory=dict)
+    plan_max_parallelism: int = 8               # 计划子查询最大并行度
+    plan_min_saving_ms: Optional[float] = None  # 计划净收益门槛（缺省 → 成本模型默认）
+    plan_min_saving_ratio: Optional[float] = None
 
 
 class _BackfillFuture:
@@ -186,6 +416,17 @@ class PipelineRunner:
                                        save_interval=config.knowledge_save_interval,
                                        backend=config.knowledge_backend)
         self.executor: Executor = build_executor(config.executor)
+        # Agent 闭环配置（默认关闭 → 保持原确定性流水线；不影响既有实验）
+        self.agent_config = dict(config.agent or {})
+        self._agent_enabled = bool(self.agent_config.get("enabled"))
+        # 计划生成设备清单（通配 FROM 展开；None → 设备/混合分区计划不生成）
+        self.device_inventory = load_device_inventory(
+            config.device_inventory, config.device_inventory_file)
+        # 完整性校验：清单缺设备会让设备分区静默丢列（verify_merged 发现不了）
+        self.device_inventory, inventory_notes = validate_device_inventory(
+            self.device_inventory, getattr(self.executor, "count_devices", None))
+        for note in inventory_notes:
+            print(f"[runner] 设备清单：{note}", flush=True)
         # 每次运行生成唯一 run_id：自动 query_id 的前缀（同名文件不覆盖）
         self.run_id = config.run_id or time.strftime("%Y%m%d-%H%M%S")
         # LLM 增强采样：sample_rate=N 表示每 N 条查询启用一次 LLM（实验采样）
@@ -240,6 +481,86 @@ class PipelineRunner:
         return seq % self._llm_every == 0
 
     # ------------------------------------------------------------------
+    # 执行 + 监控（非 Agent 路径与 Agent 执行工具共用）
+    # ------------------------------------------------------------------
+    def _execute_and_monitor(self, decision: dict, query: str, query_id: str,
+                             analysis: dict, historical_records: Any) -> dict:
+        """执行一次决策并生成监控反馈；返回可序列化的执行事实与计时。"""
+        t_exec = time.perf_counter()
+        execution: ExecutionResult = self.executor.execute(
+            query, query_id, decision.get("selected_strategy") or {}
+        )
+        execution_ms = (time.perf_counter() - t_exec) * 1000.0
+
+        t_mon = time.perf_counter()
+        # 历史参照 = 相似历史中的实测延迟（baseline 计划优先）：已见过的查询
+        # 必须能判断 improved/unchanged/degraded；全新查询才允许证据不足。
+        reference = build_historical_reference(
+            decision, historical_records, self.config.reference_time,
+            query_analysis=analysis,
+            database_state=self.config.database_state,
+        )
+        monitoring_input = {
+            "query_id": query_id,
+            "strategy_id": (decision.get("selected_strategy") or {}).get("strategy_id") or "",
+            "execution_status": execution.execution_status,
+            "failure_reason": execution.failure_reason,
+            "metrics": execution.metrics,
+            "baseline_metrics": execution.baseline_metrics,
+            "historical_reference": reference,
+            "thresholds": self.config.thresholds or None,
+        }
+        feedback = monitor(monitoring_input, llm=None)
+        monitoring_ms = (time.perf_counter() - t_mon) * 1000.0
+        return {
+            "execution": {
+                "execution_status": execution.execution_status,
+                "failure_reason": execution.failure_reason,
+                "metrics": execution.metrics,
+                "baseline_metrics": execution.baseline_metrics,
+                "timestamp": execution.timestamp,
+            },
+            "monitoring": feedback,
+            "monitoring_reference": reference,
+            "monitoring_input": monitoring_input,
+            "execution_ms": round(execution_ms, 3),
+            "monitoring_ms": round(monitoring_ms, 3),
+        }
+
+    def _agent_execute_tool(self, decision: dict, query: str, query_id: str,
+                            analysis: dict, historical_records: Any) -> dict:
+        """Agent 的执行工具：异常也转成事实性的失败结果，不中断控制环。"""
+        try:
+            return self._execute_and_monitor(
+                decision, query, query_id, analysis, historical_records)
+        except Exception as exc:   # 执行层异常 → failed（真实错误文本，不编造）
+            reason = f"{type(exc).__name__}: {exc}"
+            monitoring_input = {
+                "query_id": query_id,
+                "strategy_id": (decision.get("selected_strategy") or {}).get("strategy_id") or "",
+                "execution_status": "failed",
+                "failure_reason": reason,
+                "metrics": {},
+                "baseline_metrics": None,
+                "historical_reference": None,
+                "thresholds": self.config.thresholds or None,
+            }
+            return {
+                "execution": {
+                    "execution_status": "failed",
+                    "failure_reason": reason,
+                    "metrics": {},
+                    "baseline_metrics": None,
+                    "timestamp": None,
+                },
+                "monitoring": monitor(monitoring_input, llm=None),
+                "monitoring_reference": None,
+                "monitoring_input": monitoring_input,
+                "execution_ms": 0.0,
+                "monitoring_ms": 0.0,
+            }
+
+    # ------------------------------------------------------------------
     # 单查询闭环
     # ------------------------------------------------------------------
     def run_query(self, query: str, query_id: str = "", source: str = "",
@@ -282,17 +603,21 @@ class PipelineRunner:
                 summary=False,   # 决策路径：跳过展示聚合（成本与库大小解耦）
             )
         t_retrieval = time.perf_counter()
-        # 3. 决策（LLM 增强可选；bonus 开关来自配置 llm 节）
-        from mataof.agents.optimization_decision.provider import build_candidates
+        # 3. 决策（LLM 增强可选；候选策略/可执行计划由决策 Agent 按查询生成）
+        planning = dict(self.config.planning or {})
+        planning.setdefault("enabled", True)
+        planning.setdefault("max_parallelism", self.config.plan_max_parallelism)
+        planning.setdefault("min_saving_ms", self.config.plan_min_saving_ms)
+        planning.setdefault("min_saving_ratio", self.config.plan_min_saving_ratio)
         decision_input = {
             "query_id": query_id,
+            "query": query,
             "query_analysis": analysis,
             "database_state": self.config.database_state,
             "system_state": self.config.system_state,
             "historical_records": km_result.get("matched_records_for_decision") or [],
-            # 候选提供方按查询生成 equivalent_sql/执行参数（外部配置优先）
-            "candidate_strategies": build_candidates(
-                query, analysis, self.config.candidate_strategies),
+            # 非空外部配置覆盖 Agent 内置候选生成；缺失 → Agent 按查询生成
+            "candidate_strategies": self.config.candidate_strategies,
             "baseline_strategy": self.config.baseline_strategy,
             "reference_time": self.config.reference_time,
             "llm_preference_bonus": bool((self.config.llm or {}).get("preference_bonus")),
@@ -300,29 +625,60 @@ class PipelineRunner:
             "strategy_evaluations": km_result.get("strategy_evaluations"),
             "eval_prior_strength": self.config.eval_prior_strength,
             "eval_min_count": self.config.eval_min_count,
+            # 计划生成是决策 Agent 的固有步骤；这里只提供事实输入与执行上限
+            "device_inventory": self.device_inventory,
+            "planning": planning,
         }
+        agent_meta = None
         if self.config.fixed_strategy:
             decision = self._fixed_decision(analysis, query_id)
+            t_decision = time.perf_counter()
+            execution_info = self._execute_and_monitor(
+                decision, query, query_id, analysis,
+                km_result.get("matched_records_for_decision"),
+            )
+            t_end = time.perf_counter()
+        elif self._agent_enabled:
+            # Agent 闭环：决策 → 执行 → 观察 →（退化时）重规划 → 终止。
+            historical_records = km_result.get("matched_records_for_decision") or []
+            agent_out = run_agent(
+                decision_input,
+                execute=lambda decision: self._agent_execute_tool(
+                    decision, query, query_id, analysis, historical_records),
+                agent_config=self.agent_config,
+                llm=llm, llm_decide=self._llm_decide,
+            )
+            decision = agent_out.get("decision") or {}
+            agent_meta = agent_out.get("agent") or {}
+            execution_info = {
+                "execution": agent_out.get("execution") or {},
+                "monitoring": agent_out.get("monitoring") or {},
+                "monitoring_reference": agent_out.get("monitoring_reference"),
+                "monitoring_input": agent_out.get("monitoring_input") or {},
+            }
+            t_decision = time.perf_counter()
+            t_end = t_decision
         else:
             decision = decide(decision_input, llm=llm, llm_decide=self._llm_decide)
-        t_decision = time.perf_counter()
-        # 4. 执行（真实执行层；NullExecutor 时不产生任何指标）
-        execution: ExecutionResult = self.executor.execute(
-            query, query_id, decision.get("selected_strategy") or {}
-        )
-        t_execution = time.perf_counter()
-        # 5. 监控（事实采集，确定性）
-        monitoring_input = {
-            "query_id": query_id,
-            "strategy_id": (decision.get("selected_strategy") or {}).get("strategy_id") or "",
-            "execution_status": execution.execution_status,
-            "failure_reason": execution.failure_reason,
-            "metrics": execution.metrics,
-            "baseline_metrics": execution.baseline_metrics,
-            "thresholds": self.config.thresholds or None,
-        }
-        feedback = monitor(monitoring_input, llm=None)
-        t_monitoring = time.perf_counter()
+            t_decision = time.perf_counter()
+            execution_info = self._execute_and_monitor(
+                decision, query, query_id, analysis,
+                km_result.get("matched_records_for_decision"),
+            )
+            t_end = time.perf_counter()
+
+        # 4/5. 执行与监控结果（两种路径统一为可序列化字典）
+        execution = execution_info.get("execution") or {}
+        feedback = execution_info.get("monitoring") or {}
+        historical_reference = execution_info.get("monitoring_reference")
+        monitoring_input = execution_info.get("monitoring_input") or {}
+        t_monitoring = t_end
+        # 最后一次执行完成的时刻（扣除最终监控耗时；用于端到端计时）
+        if agent_meta is not None:
+            final_mon_ms = float(agent_meta.get("final_monitoring_ms") or 0.0)
+        else:
+            final_mon_ms = float(execution_info.get("monitoring_ms") or 0.0)
+        t_execution = t_end - final_mon_ms / 1000.0
         # B1：合并 LLM 调用（监控解读 + KM 经验总结一次完成，4→3 次/条）
         # 决策模式下关闭（LLM 仅用于决策，每条查询恰好 1 次调用 + 输出缓存）
         experience_note: Optional[str] = None
@@ -348,7 +704,7 @@ class PipelineRunner:
             "monitoring": feedback,
             "database_state": self.config.database_state,
             "system_state": self.config.system_state,
-            "timestamp": execution.timestamp,
+            "timestamp": execution.get("timestamp"),
         }, experience_note=experience_note, use_llm=False)
         t_update = time.perf_counter()
 
@@ -364,27 +720,42 @@ class PipelineRunner:
             },
             "decision": decision,
             "execution": {
-                "execution_status": execution.execution_status,
-                "failure_reason": execution.failure_reason,
-                "metrics": execution.metrics,
-                "baseline_metrics": execution.baseline_metrics,
-                "timestamp": execution.timestamp,
+                "execution_status": execution.get("execution_status"),
+                "failure_reason": execution.get("failure_reason"),
+                "metrics": execution.get("metrics") or {},
+                "baseline_metrics": execution.get("baseline_metrics"),
+                "timestamp": execution.get("timestamp"),
             },
             "monitoring": feedback,
+            "monitoring_reference": historical_reference,   # 效果判断所用的历史实测参照
             "knowledge_update": knowledge_update,
+            # Agent 闭环元数据（未启用 → None）：尝试序列、终止原因、逐步 trace
+            "agent": agent_meta,
         }
         # ---- D8：优化机制各阶段成本与端到端计时（纯 runner 墙钟；不碰 Agent 输出）----
         ms = lambda t0, t1: round((t1 - t0) * 1000.0, 2)  # noqa: E731
-        stage = {
-            "analysis_ms": ms(t_entry, t_analysis),
-            "retrieval_ms": ms(t_analysis, t_retrieval),
-            "decision_ms": ms(t_retrieval, t_decision),
-            # 执行阶段 = 优化后语句的单次执行（含结果集完整消费）；
-            # 与 response_time_ms 同一口径（客户端墙钟）
-            "execution_stage_ms": ms(t_decision, t_execution),
-            "monitoring_ms": ms(t_execution, t_monitoring),
-            "knowledge_update_ms": ms(t_monitoring, t_update),
-        }
+        if agent_meta is not None:
+            # Agent 模式：分项来自闭环内的累计计时（可能包含多次尝试）
+            at = agent_meta.get("timings") or {}
+            stage = {
+                "analysis_ms": ms(t_entry, t_analysis),
+                "retrieval_ms": ms(t_analysis, t_retrieval),
+                "decision_ms": round(float(at.get("decision_ms") or 0.0), 2),
+                "execution_stage_ms": round(float(at.get("execution_ms") or 0.0), 2),
+                "monitoring_ms": round(float(at.get("monitoring_ms") or 0.0), 2),
+                "knowledge_update_ms": ms(t_monitoring, t_update),
+            }
+        else:
+            stage = {
+                "analysis_ms": ms(t_entry, t_analysis),
+                "retrieval_ms": ms(t_analysis, t_retrieval),
+                "decision_ms": ms(t_retrieval, t_decision),
+                # 执行阶段 = 优化后语句的单次执行（含结果集完整消费）；
+                # 与 response_time_ms 同一口径（客户端墙钟）
+                "execution_stage_ms": ms(t_decision, t_execution),
+                "monitoring_ms": ms(t_execution, t_monitoring),
+                "knowledge_update_ms": ms(t_monitoring, t_update),
+            }
         trace["overhead"] = {
             **stage,
             # 优化机制自身成本合计（各行为之和，不含执行）
@@ -437,9 +808,19 @@ class PipelineRunner:
             from mataof.agents.optimization_decision.llm_enhance import (
                 build_llm_analysis as dec_build,
             )
-            candidates = normalize_input(decision_input).candidates
+            ctx = normalize_input(decision_input)
+            # 候选由 Agent 内置生成器产生；补进只读副本，保证 LLM 解读
+            # prompt 看到与决策一致的候选集合（不改变决策输入本身）。
+            llm_input = dict(decision_input)
+            llm_input["candidate_strategies"] = {
+                dim: [{"strategy": e["name"],
+                       "equivalent_sql": e.get("equivalent_sql"),
+                       "parameters": e.get("parameters")}
+                      for e in entries]
+                for dim, entries in ctx.candidates.items()
+            }
             trace["decision"]["llm_analysis"] = dec_build(
-                self.llm, decision_input, trace["decision"], candidates)
+                self.llm, llm_input, trace["decision"], ctx.candidates)
 
             from mataof.agents.execution_monitoring.llm_enhance import (
                 build_post_execution_llm,
@@ -707,24 +1088,35 @@ class PipelineRunner:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(trace, f, ensure_ascii=False, indent=2)
         # 汇总行（追加，实验分析用；含 D8 各阶段成本与端到端）
-        decision = trace["decision"]
-        mon = trace["monitoring"]
+        decision = trace.get("decision") or {}
+        mon = trace.get("monitoring") or {}
+        metrics = mon.get("metrics") or {}
+        agent = trace.get("agent") or {}
         ov = trace.get("overhead") or {}
+        plan_entry = (decision.get("decision") or {}).get("plan") or {}
         summary = {
             "run_id": self.run_id,
             "query_id": query_id,
             "source": trace.get("source") or "",
             "sampling": trace.get("sampling"),
-            "query_type": trace["analysis"].get("query_type"),
-            "strategy_id": decision["selected_strategy"]["strategy_id"],
-            "decision_status": decision["decision_status"],
-            "execution_status": mon["execution_status"],
-            "performance_assessment": mon["performance_assessment"],
-            "anomaly_count": len(mon["anomalies"]),
-            "response_time_ms": mon["metrics"]["response_time_ms"],
+            "query_type": (trace.get("analysis") or {}).get("query_type"),
+            "strategy_id": (decision.get("selected_strategy") or {}).get("strategy_id"),
+            "decision_status": decision.get("decision_status"),
+            # 计划（未生成 → null；便于按计划族/计划聚合实验指标）
+            "plan_id": plan_entry.get("strategy"),
+            "plan_family": plan_entry.get("family"),
+            "plan_fallback": metrics.get("plan_fallback"),
+            "execution_status": mon.get("execution_status"),
+            "performance_assessment": mon.get("performance_assessment"),
+            "anomaly_count": len(mon.get("anomalies") or []),
+            "response_time_ms": metrics.get("response_time_ms"),
             "baseline_response_time_ms": (
-                trace["execution"].get("baseline_metrics") or {}
+                (trace.get("execution") or {}).get("baseline_metrics") or {}
             ).get("response_time_ms"),
+            # Agent 闭环（未启用 → null）
+            "agent_steps": agent.get("steps"),
+            "agent_attempts": len(agent.get("attempts") or []),
+            "agent_terminated_by": agent.get("terminated_by"),
             # D8：优化机制各阶段成本 + 端到端（run_log 供轮次汇总聚合）
             "analysis_ms": ov.get("analysis_ms"),
             "retrieval_ms": ov.get("retrieval_ms"),
@@ -733,12 +1125,12 @@ class PipelineRunner:
             "knowledge_update_ms": ov.get("knowledge_update_ms"),
             "pipeline_overhead_ms": ov.get("pipeline_overhead_ms"),
             "end_to_end_ms": ov.get("end_to_end_ms"),
-            "cpu_utilization": mon["metrics"].get("cpu_utilization"),
-            "cpu_utilization_peak": mon["metrics"].get("cpu_utilization_peak"),
-            "memory_utilization": mon["metrics"].get("memory_utilization"),
-            "memory_utilization_peak": mon["metrics"].get("memory_utilization_peak"),
-            "knowledge_confidence": trace["knowledge_retrieval"]["knowledge_confidence"],
-            "stored": trace["knowledge_update"]["stored"],
+            "cpu_utilization": metrics.get("cpu_utilization"),
+            "cpu_utilization_peak": metrics.get("cpu_utilization_peak"),
+            "memory_utilization": metrics.get("memory_utilization"),
+            "memory_utilization_peak": metrics.get("memory_utilization_peak"),
+            "knowledge_confidence": (trace.get("knowledge_retrieval") or {}).get("knowledge_confidence"),
+            "stored": (trace.get("knowledge_update") or {}).get("stored"),
         }
         with open(os.path.join(self.config.results_dir, "run_log.jsonl"),
                   "a", encoding="utf-8") as f:
@@ -788,4 +1180,13 @@ def load_config_file(path: str) -> RunnerConfig:
         knowledge_save_interval=int(data.get("knowledge_save_interval") or 1),
         async_drain_timeout=float(data.get("async_drain_timeout")
                                   if data.get("async_drain_timeout") is not None else 0.0),
+        device_inventory=data.get("device_inventory"),
+        device_inventory_file=data.get("device_inventory_file"),
+        planning=data.get("planning") or {},
+        agent=data.get("agent") or {},
+        plan_max_parallelism=int(data.get("plan_max_parallelism") or 8),
+        plan_min_saving_ms=(float(data["plan_min_saving_ms"])
+                            if data.get("plan_min_saving_ms") is not None else None),
+        plan_min_saving_ratio=(float(data["plan_min_saving_ratio"])
+                               if data.get("plan_min_saving_ratio") is not None else None),
     )

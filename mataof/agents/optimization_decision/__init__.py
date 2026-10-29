@@ -18,6 +18,7 @@ from mataof.agents.optimization_decision.agent import (
     OptimizationDecisionAgent,
     decide,
     default_agent,
+    run_agent,
 )
 
-__all__ = ["OptimizationDecisionAgent", "decide", "default_agent"]
+__all__ = ["OptimizationDecisionAgent", "decide", "default_agent", "run_agent"]

@@ -20,5 +20,6 @@
   "thresholds": {},
   "reference_time": null,
   "knowledge_save_interval": 500,
-  "async_drain_timeout": 0
+  "async_drain_timeout": 0,
+  "device_inventory_file": "data/device_inventory.json"
 }

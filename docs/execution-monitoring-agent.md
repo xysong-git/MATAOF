@@ -68,6 +68,26 @@
 | success 但无 baseline 且无历史典型值 | insufficient_evidence | 0.0 |
 
 - 主指标 = `response_time_ms`；缺失时退到 `p95_latency_ms`（basis 中说明）；
+- **Runner 侧参照构造**：已见过的查询必须能给出 improved/unchanged/degraded。
+  参照只取历史**实测**延迟（不使用成本先验）：
+  0. 运行器传入查询分析结果时，先取"同查询形状 + 同数据规模"的实测子集
+     （形状口径见 `mataof.similarity.same_query_shape`：除时间跨度允许 10%
+     数据相关抖动外紧凑特征完全一致，含测点指纹/窗口间隔/聚合函数）；
+     子集执行次数 ≥3 才启用，否则退回全部相似记录——近邻形状（q3/q10 测点
+     不同、q7/q11 窗口不同）的绝对延迟不得稀释当前形状的参照；
+  1. baseline 历史样本充分（≥3 次且 ≥ 同查询形状**全部计划证据**的 10%）
+     → baseline 历史（衡量相对原查询的优化收益），无论所选计划是什么；
+  2. baseline 样本稀少（选择性执行/冷启动，如某查询形状只跑过 1 次
+     1542ms 而常态 13ms）或缺失，且所选计划有同计划历史 → 同计划历史
+     （同查询形状 + 同执行计划，口径一致且样本更密）；
+  3. 否则 → 相似历史中任意计划的加权实测延迟（典型表现；baseline 稀疏时
+     也不拿冷启动值当参照）；
+  4. 无任何实测历史（全新查询类型/语句）才保持 insufficient_evidence。
+  样本充分性口径与决策成本模型共用（`mataof.similarity`）。
+  所用参照写入 `trace.monitoring_reference`（source/plan_id/count/scope 可审计，
+  `scope` = `same_shape`（同形状同规模子集）| `similar_records`（全部相似记录）），
+  并在 `feedback.assessment_basis` 标注参照来源（baseline 历史 / 同计划历史 /
+  相似历史）与样本量，避免把"比该计划平常更快"误读为"相对原查询的优化收益"；
 - `feedback.strategy_effective` 映射：improved → true；degraded/failed → false；
   unchanged/insufficient_evidence → null；
 - `feedback.assessment_basis` 记录判断依据（可追踪的实测事实）；

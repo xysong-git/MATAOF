@@ -1,8 +1,11 @@
 """候选提供方（provider.py）单元测试。
 
-覆盖：align_by_device 只在引擎可接受（FROM 含一级通配）时提供并携带 SQL；
-显式设备列表不提供该候选（引擎会拒绝 ALIGN BY DEVICE——实测 701）；
-fetch_large 携带执行参数；外部配置候选优先。
+覆盖（以真实 IoTDB 2.0.6 复核后的引擎约束为准）：
+- align_by_device 在显式多设备列表与一级通配 FROM 下均**可以**提供并携带
+  SQL（早期"显式列表被引擎拒绝"的前提是错的）；
+- WHERE 含完整测点路径谓词（引擎 701）或 LAST 查询 → 不提供；
+- 单设备 → 不提供（对齐方式无差异）；
+- fetch_large 携带执行参数；外部配置候选优先。
 运行：pytest tests/test_provider.py -v
 """
 
@@ -21,13 +24,31 @@ def _names(candidates, dim):
     return [e["strategy"] for e in candidates[dim]]
 
 
-def test_align_by_device_not_offered_for_explicit_device_list():
-    # 显式设备路径列表：引擎拒绝 ALIGN BY DEVICE（实测 701）→ 只提供 time_aligned
+def test_align_by_device_offered_for_explicit_device_list():
+    # 显式设备路径列表：引擎接受 ALIGN BY DEVICE（真实 IoTDB 2.0.6 复核）
     q = ("SELECT s_0 FROM root.test.d_0, root.test.d_1 "
          "WHERE time >= 1 AND time <= 2")
     an = analyze(q, query_id="x")
     c = build_candidates(q, an)
+    assert _names(c, "alignment") == ["time_aligned", "align_by_device"]
+    ab = next(e for e in c["alignment"] if e["strategy"] == "align_by_device")
+    assert ab["equivalent_sql"] == q + " ALIGN BY DEVICE"
+
+
+def test_align_by_device_rejected_for_full_path_filter():
+    # WHERE 含完整测点路径谓词：引擎返回 701 → 不提供该候选
+    q = ("SELECT s_0 FROM root.test.d_0, root.test.d_1 "
+         "WHERE root.test.d_0.s_0 > 1 AND time >= 1 AND time <= 2")
+    an = analyze(q, query_id="fp")
+    c = build_candidates(q, an)
     assert _names(c, "alignment") == ["time_aligned"]
+
+
+def test_align_by_device_rejected_for_last_query():
+    q = "SELECT LAST s_0 FROM root.test.d_0, root.test.d_1"
+    an = analyze(q, query_id="last")
+    c = build_candidates(q, an)
+    assert "align_by_device" not in _names(c, "alignment")
 
 
 def test_align_by_device_offered_for_wildcard_path():

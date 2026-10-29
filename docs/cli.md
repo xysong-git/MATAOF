@@ -53,9 +53,19 @@ baseline 延迟（样本 3）: avg 6.46ms | P50 6.34ms | P95 7.4ms | P99 7.4ms
   "candidate_strategies": null,                 // 不填 → 使用策略目录全集
   "baseline_strategy": null,                    // 不填 → 内置安全 baseline
   "thresholds": {},                             // 监控异常阈值覆盖
-  "reference_time": null                        // 历史时效衰减参考点（epoch 毫秒）
+  "reference_time": null,                       // 历史时效衰减参考点（epoch 毫秒）
+  "agent": {                                    // 决策闭环（默认关闭）
+    "enabled": false,
+    "max_attempts": 2,
+    "deadline_ms": 30000,
+    "replan_on": ["degraded", "failed"]
+  }
 }
 ```
+
+启用 `agent.enabled` 后，Optimization Decision Agent 会执行所选计划并观察监控反馈；
+实测 degraded/failed 时排除该计划重规划。详细语义、trace 字段与消融方式见
+[docs/agent-runtime.md](agent-runtime.md)。
 
 ## 4. 执行层对接（executor）
 

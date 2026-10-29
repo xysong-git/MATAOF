@@ -19,7 +19,19 @@ mataof run --config config.dbs.json \
   "SELECT s_1200 FROM root.dbs.g_0.d_0 WHERE time >= 1640966400000 AND time <= 1640966650000"
 ```
 
-3. 依赖：`pip install -r requirements.txt`（sqlglot / psutil / apache-iotdb / pytest）。
+3. 生成通配设备清单（agent/llm/fixed 共用；数据或设备变更后需重新生成）：
+
+```bash
+python3 scripts/gen_device_inventory.py       # → data/device_inventory.json
+```
+
+脚本先 `SHOW DEVICES` 收集、再 `COUNT DEVICES` 核对，数量不一致直接报错退出、
+不写文件（绝不产出不完整清单）。清单缺失时自动降级（不生成设备/混合分区
+计划，其余计划照常）；运行期 `PipelineRunner` 还会用同一口径再核对一次，
+不完整的模式会被剔除并打印原因——设备分区按清单展开子查询，清单缺设备
+会让合并结果静默丢列（`verify_merged` 只按计划自身校验，发现不了）。
+
+4. 依赖：`pip install -r requirements.txt`（sqlglot / psutil / apache-iotdb / pytest）。
 
 ## 1. 配置（已就绪）
 
@@ -71,11 +83,29 @@ agent（与 agent+llm） = Ours。fixed 模式固定策略在
 full_scan / time_first / final_level_aggregation），跳过决策 Agent 与历史检索，
 其余链路（执行/监控/入库/追踪）完全复用，指标口径一致。
 
+**native 双口径（`--result-mode row|df`，仅 native 模式）**——结果消费方式：
+
+| 口径 | 客户端 API | 输出去向 | 用途 |
+|---|---|---|---|
+| `row`（默认） | `has_next()/next()` 逐行 | `results_baseline/` | 与历史 native baseline 连续 |
+| `df` | `has_next_df()/next_df()` 批量 | `results_baseline_df/` | **与 agent 计划同消费方式，公平对比用** |
+
+agent 的所有计划（含 `baseline_single_df`）都走 DataFrame 批量消费。同一 SQL、
+同一客户端下，消费方式本身就能造成数倍差异（dbl 交替重复实测：q12
+120.4→41.4ms、q2 40.0→4.5ms、q9 33.7→3.9ms）。因此**native vs agent 的
+端到端对比必须用 `--result-mode df`**；row 口径只用于和历史 baseline 对齐。
+两个输出目录互不覆盖，每轮只清理当前口径目录。
+
+```bash
+bash scripts/run_experiment.sh --mode native --result-mode df \
+    --query-dir query/queries_dbl --sample random --seed 42
+```
+
 公共参数：`--query-dir DIR`（**只跑指定查询目录**，如 `query/queries_dbs`；设置后忽略
 `--scales`，规模从目录名推导用于选配置）、`--scales dbs,dbm,dbl`（规模）、
 `--files q1,q4`（只跑指定文件，默认全部 q*.sql）、`--per-file-limit N`、
 `--sample seq|random`、`--seed N`、`--workers N`（查询级并行，agent/llm/fixed
-模式生效）。
+模式生效）、`--result-mode row|df`（仅 native，见上表）。
 
 **缓存协议（三组对照前手动执行，见 §1.3）**：每个模式开跑前重启 IoTDB +
 清 OS 页缓存——否则后跑的模式继承前序模式的缓存预热，跨模式延迟不可比。
@@ -128,7 +158,9 @@ LLM 模式说明（decision_mode="llm_primary"，D9 设计更新）：
 计时口径：四模式的执行延迟统一为**客户端墙钟**（发送 → 完整消费结果集）。
 native 由 `run_native_client.py` 直发原始 SQL 测量（采样与 agent 共用
 `sample_items`，同种子同抽样）；本机 loopback 部署下网络开销可忽略，客户端墙钟
-≈ 服务器执行 + 结果传输。决策开销与端到端指标见 §1.2。
+≈ 服务器执行 + 结果传输。**跨模式对比必须在同一结果消费口径下进行**——agent
+全部走 DataFrame 批量，故对比 native 用 `--result-mode df`（见 §1.1）。
+决策开销与端到端指标见 §1.2。
 
 ## 1.2 决策开销与端到端指标（D8）
 
@@ -193,7 +225,9 @@ sync && echo 3 | sudo tee /proc/sys/vm/drop_caches
 ```bash
 for m in native agent llm; do
   <执行上面的缓存协议>
-  bash scripts/run_experiment.sh --mode $m --query-dir query/queries_dbl \
+  extra=""
+  [[ "$m" == "native" ]] && extra="--result-mode df"   # 与 agent 同消费口径
+  bash scripts/run_experiment.sh --mode $m $extra --query-dir query/queries_dbl \
       --per-file-limit 100 --sample random --seed 42
 done
 ```

@@ -46,14 +46,29 @@ Strategy + Execution Metrics + Execution Result + Timestamp）：
 - 只允许追加（`add`），不提供修改/删除接口；
 - JSON 持久化采用原子写（临时文件 + os.replace），损坏文件从空库恢复且不覆盖原文件；
 - record_id 由存储分配（`rec00000001` 递增），唯一可追踪；
-- `store.statistics()` 提供全库累计统计（按 strategy_id：total/success/failure/
+- 派生评价表按 `query_type|dimension|strategy` 聚合：`count`（总执行）、
+  `evaluated_count`（有明确效果判断的执行）、`insufficient_count`、
+  `success`（improved）、`failure`（degraded/failed）、`unchanged_count`、
+  `decisive_count`（success+failure）、`success_ratio`、`avg_latency_ms`；
+  **成功率分母只含方向明确的执行（success+failure）**：insufficient_evidence /
+  cancelled 是"未观测"，unchanged 是"无提升也无退化"的中性结果，二者都不作为
+  策略失败；全为 unchanged 时 `success_ratio=None`（无方向证据，不给先验）。
+  旧库（无 evaluated/failure/unchanged 计数）加载时从原始执行记录自动重建一次；
+- `store.statistics()` 提供全库累计统计（按 strategy_id：total/evaluated_count/
+  insufficient_count/success/failure/unchanged_count/decisive_count/
   success_ratio/avg_latency_ms）。
+- **检索缓存一致性**：同一个签名追加执行时签名数不变，但聚合延迟/执行数/效果
+  分布已变化；存储将受影响的签名标记为脏，检索侧增量刷新对应矩阵行
+  （count/平均延迟），不会在进程内一直读到第一次执行的旧统计。
 
 ## 4. 检索（`retrieval.py`）
 
 相似度口径与 Optimization Decision Agent 完全一致（共享模块 `mataof/similarity.py`，
 0.6×查询特征 + 0.25×数据库状态 + 0.15×系统状态），多维特征匹配，**不做 SQL 文本
-字符串匹配**。
+字符串匹配**。查询特征摘要（`compact_features`）包含测点指纹（值过滤列 + 聚合
+参数的测点名）与窗口间隔，用于区分结构相同但对象不同的近邻形状（q3/q10 测点
+不同、q7/q11 窗口间隔/聚合函数不同）；检索本身仍按相似度返回近邻形状，
+"同查询形状"证据筛选由下游（决策成本模型/监控参照）按需再做。
 
 匹配分层：
 | 层级 | 综合相似度 |

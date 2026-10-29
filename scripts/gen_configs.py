@@ -83,7 +83,12 @@ def base_config(scale: str, mode: str) -> dict:
     if mode == "llm":
         cfg["llm"] = llm_section(scale)
     if mode == "fixed":
+        # 固定策略对照不走计划生成，无需设备清单
         cfg["fixed_strategy"] = dict(FIXED_STRATEGY)
+    else:
+        # 通配 FROM 的设备分区展开清单；由 scripts/gen_device_inventory.py
+        # 生成并做完整性校验；文件缺失时自动降级（不生成设备分区计划）。
+        cfg["device_inventory_file"] = "data/device_inventory.json"
     return cfg
 
 

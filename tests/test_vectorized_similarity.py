@@ -34,7 +34,7 @@ def _record(qf, db=None, sy=None):
 
 def _qf(query_type="range_query", span=1000, level="narrow", device_count=1,
         multi=False, non_time=0, has_agg=False, group_by=False, window=False,
-        functions=None, has_time=True):
+        functions=None, has_time=True, window_interval=None, measurements=None):
     return {
         "query_type": query_type,
         "time": {"has_time_filter": has_time, "time_span": span,
@@ -42,7 +42,10 @@ def _qf(query_type="range_query", span=1000, level="narrow", device_count=1,
         "device": {"device_count": device_count, "multi_device": multi},
         "filter": {"non_time_filter_count": non_time},
         "aggregation": {"has_aggregation": has_agg, "has_group_by": group_by,
-                        "has_window": window, "functions": functions or []},
+                        "has_window": window,
+                        "window_interval_ms": window_interval,
+                        "functions": functions or []},
+        "measurements": measurements,
     }
 
 
@@ -62,6 +65,17 @@ def _records_for_equivalence():
         _record(_qf(), db={"device_scale": 0}),                  # 零设备规模
         _record(_qf(), sy={"load_level": "high"}),
         _record(_qf(), db={"data_scale_level": "large"}, sy={"load_level": "low"}),
+        # 窗口间隔：双方都有/单方缺失/双方缺失
+        _record(_qf(has_agg=True, group_by=True, window=True,
+                    window_interval=20000, functions=["count"])),
+        _record(_qf(has_agg=True, group_by=True, window=True,
+                    window_interval=10000, functions=["sum"])),
+        _record(_qf(window=True, window_interval=5000)),
+        # 测点指纹：双方都有/部分重叠/单方缺失
+        _record(_qf(measurements=["s_1", "s_2"])),
+        _record(_qf(measurements=["s_1"])),
+        _record(_qf(measurements=["s_3"])),
+        _record(_qf(measurements=[])),               # 空集合 → 未知
     ]
     return recs
 
@@ -99,6 +113,10 @@ def test_equivalence_current_variants():
         _qf(query_type="point_query", span=0),
         _qf(level="wide", span=5000, has_agg=True, functions=["sum"]),
         _qf(has_time=False, span=None, level="unknown", device_count=3, non_time=2),
+        _qf(has_agg=True, group_by=True, window=True, window_interval=20000,
+            functions=["count"], measurements=["s_1"]),
+        _qf(measurements=["s_2", "s_3"]),
+        _qf(window_interval=3000, measurements=[]),
     ]
     for cur in currents:
         q_s, db_s, sy_s, overall = vectorized_similarities(cur, {}, {}, mat)

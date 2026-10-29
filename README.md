@@ -37,7 +37,7 @@
 - 过滤条件（分类计数、组合关系、选择率——仅来自数据库提供的数据）
 - 聚合特征（函数、GROUP BY / 窗口、聚合范围）
 - 扫描相关（扫描估计——仅来自数据库统计信息；定性结构信号）
-- 三大优化维度（Time Pruning / Filter Order / Aggregation Placement）的相关性候选陈述
+- 优化相关性候选陈述（供决策 Agent 参考，不直接选择策略）
 - `unknown_features` 与 `analysis_confidence`
 
 详细规格见 [docs/query-analysis-agent.md](docs/query-analysis-agent.md)。
@@ -46,15 +46,22 @@
 
 `mataof/agents/optimization_decision/`
 
-综合查询特征、数据库状态、系统状态与历史执行经验，在预定义的候选策略空间中为当前查询
-选择优化策略（Time Pruning / Filter Order / Aggregation Placement 三维度）。
+综合查询特征、数据库状态、系统状态与历史执行经验，在预定义的策略空间中为当前查询
+选择优化策略（alignment / fetch_size 两维度），并在提供原始 SQL 时由 Agent 内置
+生成器编译可执行计划（时间/设备/混合分区、部分聚合、SQL 改写等）后按成本模型选择。
 
-- **有界策略空间**：候选 = 输入候选 ∩ 策略目录，禁止自行创造策略
+- **有界策略空间**：候选策略 = 输入候选 ∩ 策略目录；计划候选来自固定计划族，
+  禁止自行创造策略/计划
+- **生成与选择同属 Agent**：`decide()` 内完成候选生成、成本评估与选择；生成器只输出
+  结构上可执行、语义等价的计划
 - **上下文感知**：仅凭 SQL 文本不决策（缺少 query_analysis → invalid_input）
 - **历史知识是证据而非规则**：相似度（查询特征/数据库状态/系统状态）达标才引用，按相似度加权
 - **风险控制**：证据不足时优先安全 baseline/fallback；高风险策略需更强证据
-- 输出结构化策略（strategy_id + strategy_parameters）、逐维度 reason/confidence、
-  实际使用的 evidence、整体置信度与 decision_status
+- **可选的闭环模式**（`agent.enabled=true`）：通过运行时执行决策、观察监控反馈，
+  实测 degraded/failed 时排除该计划并重规划，直到达标/无替代/预算耗尽；
+  逐步尝试与终止原因写入 trace（默认关闭，确定性单次决策路径不变）
+- 输出结构化策略（strategy_id + strategy_parameters + execution_plan）、逐维度
+  reason/confidence、实际使用的 evidence、整体置信度与 decision_status
 
 详细规格见 [docs/optimization-decision-agent.md](docs/optimization-decision-agent.md)。
 
@@ -113,6 +120,8 @@ python3 -m pytest tests/ -v
 ```
 
 正式运行手册（配置文件、执行层对接、追踪输出）见 [docs/cli.md](docs/cli.md)；
+**决策闭环（执行→观察→退化重规划）的启用方式与消融配置见
+[docs/agent-runtime.md](docs/agent-runtime.md)**；
 **三规模查询集（query/ 目录）的一轮实验执行说明见 [docs/run-experiment.md](docs/run-experiment.md)**；
 各 Agent 的输入/输出契约见 docs/ 下的规格文档。
 
@@ -122,6 +131,7 @@ python3 -m pytest tests/ -v
 MATAOF/
 ├── mataof/
 │   ├── schemas.py                    # 统一数据对象、输出契约、历史记录契约（模板/枚举/阈值）
+│   ├── runtime/                      # Agent 运行时：工具注册/有界控制环/观察/消息总线
 │   └── agents/
 │       ├── query_analysis/
 │       │   ├── agent.py              # 编排入口：解析 → 特征 → 相关性 → 置信度
@@ -137,12 +147,15 @@ MATAOF/
 │       │       ├── aggregation.py    #   任务 5：聚合特征
 │       │       └── scan.py           #   任务 6：扫描相关
 │       └── optimization_decision/
-│           ├── agent.py              # 编排：评估 → 门控 → 选择/回退 → 证据 → 置信度
+│           ├── agent.py              # 编排：候选/计划生成 → 评估 → 选择/回退 → 证据；
+│           │                         #       可选闭环：执行 → 观察 → 退化重规划
+│           ├── provider.py           # 内置候选生成（等价 SQL / 执行参数 / 计划）
 │           ├── catalog.py            # 有界策略目录（需求/风险/baseline）
 │           ├── context.py            # 输入规范化与派生信号
 │           ├── similarity.py         # 历史记录相似度与加权（证据而非规则）
 │           ├── scoring.py            # 候选评分 + 风险门控 + 维度内选择
-│           └── confidence.py         # 维度/整体置信度公式
+│           ├── confidence.py         # 维度/整体置信度公式
+│           └── plans/                # 计划语法/生成/成本模型/决策集成
 │       └── execution_monitoring/
 │           ├── agent.py              # 编排：采集 → 比较 → 判断 → 异常 → 反馈
 │           ├── normalize.py          # 指标校验与归一化（事实采集，不虚构）
@@ -161,7 +174,7 @@ MATAOF/
 │   └── executors/                    # 执行层抽象：Null / File（回放）/ IoTDB（真实执行）
 ├── pyproject.toml                    # 可安装（console script: mataof）
 ├── config.example.json               # 配置文件模板
-├── tests/                            # 117 例单元测试 + 真实 IoTDB 语料鲁棒性验证
+├── tests/                            # 386 例单元测试 + 真实 IoTDB 语料鲁棒性验证
 ├── examples/
 │   ├── analyze_example.py
 │   ├── decide_example.py
@@ -171,6 +184,7 @@ MATAOF/
     ├── cli.md                        # 运行手册（正式入口）
     ├── query-analysis-agent.md       # Query Analysis Agent 规格说明
     ├── optimization-decision-agent.md # Optimization Decision Agent 规格说明
+    ├── agent-runtime.md              # Agent 运行时、决策闭环与消融配置
     ├── execution-monitoring-agent.md  # Execution Monitoring Agent 规格说明
     └── knowledge-memory-agent.md      # Knowledge Memory Agent 规格说明
 ```

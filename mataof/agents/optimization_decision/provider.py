@@ -1,7 +1,7 @@
-"""候选提供方（策略空间重设计）：按查询为目录内策略生成 equivalent_sql / 执行参数。
+"""决策 Agent 的内置候选生成器：按查询生成 equivalent_sql / 执行参数。
 
-原则不变：决策 Agent 只选择、不生成 SQL。本模块是"候选提供方（外部系统）"的
-内置实现——为真实可送达执行层的杠杆生成改写/参数（全部有实测依据，见
+原则不变：决策 Agent 只选择、不生成 SQL；候选生成与选择同属 Agent 内部。
+为真实可送达执行层的杠杆生成改写/参数（全部有实测依据，见
 scripts/bench_sql_levers.py 与 catalog.py 注释）：
 - alignment/align_by_device  ：SQL 追加 ALIGN BY DEVICE（结果内容等价、组织形态不同；
   实测方向随设备数变化——宽设备扫描默认对齐快 15~25×，少量设备按设备对齐略优）；
@@ -20,6 +20,7 @@ from mataof.agents.optimization_decision.catalog import (
     STRATEGY_CATALOG,
     alignment_applies,
 )
+from .plans.sql import has_full_path_filter, has_last
 
 FETCH_LARGE = 10000
 
@@ -27,18 +28,21 @@ FETCH_LARGE = 10000
 def _append_align_by_device(query: str, analysis: Optional[dict]) -> Optional[str]:
     """在查询尾部追加 ALIGN BY DEVICE（引擎约束校验后）。
 
-    本 IoTDB 构建的约束（实测）：ALIGN BY DEVICE 只接受测点级或**一级通配**
-    路径（如 root.db.g_0.*）——显式设备路径列表（root.db.g_0.d_0, ...）
-    会被引擎拒绝（701）。因此只有 FROM 含通配路径的查询才可改写；
-    其余查询不提供该候选（避免执行失败与无效声明）。
+    实测约束（与早期假设相反，已用真实 IoTDB 2.0.6 复核）：
+    - **显式设备列表**（root.db.g_0.d_0, root.db.g_0.d_1）**可以**使用
+      ALIGN BY DEVICE；
+    - WHERE 中含完整测点路径谓词（root.db.g_0.d_0.s_0）时引擎返回 701；
+    - LAST 查询、已有 ALIGN BY DEVICE 的查询不改写；
+    - 单设备查询不做该改写（无收益）。
     """
     text = query.strip().rstrip(";").strip()
     if not text or "ALIGN BY DEVICE" in text.upper():
         return None
     qf = (analysis or {}).get("query_features") or {}
-    paths = (qf.get("device") or {}).get("device_paths") or []
-    if not any("*" in str(p) for p in paths):
-        return None   # 无通配路径 → 引擎不接受该子句 → 不提供改写
+    if not alignment_applies(qf):
+        return None   # 单设备 → 对齐方式无差异
+    if has_last(text) or has_full_path_filter(text):
+        return None   # 引擎拒绝/语义不适用
     return f"{text} ALIGN BY DEVICE"
 
 
@@ -69,3 +73,23 @@ def build_candidates(query: str, analysis: Optional[dict],
             out.append(entry)
         candidates[dim] = out
     return candidates
+
+
+def build_plans(query: str, analysis: Optional[dict],
+                device_inventory: Any = None,
+                max_parallelism: int = 8) -> list[dict]:
+    """计划候选（统一入口）：编译为**可执行**的计划描述符列表。
+
+    与 build_candidates 同属 Agent 内置候选生成；成本模型只做选择。生成器保证：
+    只有能编译出真实子查询 + 合并规格的计划才会返回（不可确定的结构直接
+    不生成，而不是生成后失败）。
+    """
+    from .plans.generator import build_plan_candidates
+    return build_plan_candidates(query, analysis, device_inventory, max_parallelism)
+
+
+def plan_generation_notes(query: str, analysis: Optional[dict],
+                          device_inventory: Any = None) -> list[str]:
+    """计划生成器的事实说明（用于决策 notes；不含策略建议）。"""
+    from .plans.generator import plan_generation_notes as _notes
+    return _notes(query, analysis, device_inventory)

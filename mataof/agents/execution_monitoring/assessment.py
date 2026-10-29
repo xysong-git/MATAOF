@@ -97,6 +97,25 @@ def assess(status: str, metrics: dict, comparison: dict,
 
     src_text = "baseline" if source == "baseline" else "历史典型值"
     basis.append(f"{primary_key}: 实测 {cur} ms vs {src_text}（变化 {base_pct}%）")
+    if source == "historical" and isinstance(historical_reference, dict):
+        # 交代参照的来源与样本量：同计划历史 ≠ baseline 历史，避免把
+        # "比该计划平常更快"误读为"相对原查询的优化收益"。
+        ref_source = historical_reference.get("source")
+        ref_plan = historical_reference.get("plan_id")
+        ref_count = historical_reference.get("count")
+        label = {
+            "history_baseline": "baseline 计划历史",
+            "history_baseline_records": "baseline 计划历史",
+            "history_same_plan": "同计划历史",
+            "history_matched": "相似查询历史典型表现",
+        }.get(ref_source, "历史实测")
+        detail = label
+        if ref_plan or (isinstance(ref_count, int) and ref_count > 0):
+            parts = [str(ref_plan)] if ref_plan else []
+            if isinstance(ref_count, int) and ref_count > 0:
+                parts.append(f"{ref_count} 次执行")
+            detail += f"（{'，'.join(parts)}）"
+        basis.append(f"历史参照来源：{detail}")
 
     if base_pct <= -threshold:
         assessment = "improved"

@@ -59,7 +59,7 @@ class CandidateEvaluation:
     llm_bonus: float = 0.0                                # LLM 偏好加分（不参与门控）
     eval_prior: float = 0.0                               # 策略评价表先验（D1，不参与门控）
     factor_labels: list = field(default_factory=list)     # 用于 reason 的可追踪说明
-    equivalent_sql: Optional[str] = None                  # 候选提供方给出的等价 SQL
+    equivalent_sql: Optional[str] = None                  # 候选生成器给出的等价 SQL
     parameters: Optional[dict] = None                     # 候选提供的执行级参数
     requirements_met: bool = True
     gate_passed: bool = True
@@ -168,12 +168,24 @@ def _evaluation_prior(ctx: DecisionContext, evaluations: Optional[dict],
         return 0.0
     key = f"{ctx.query_type or 'unknown'}|{dim}|{name}"
     e = evaluations.get(key)
-    if not isinstance(e, dict) or e.get("count", 0) < min_count:
+    if not isinstance(e, dict):
         return 0.0
-    ratio = float(e.get("success_ratio") or 0.0)
+    # 成功率分母只含方向明确的执行（improved + degraded + failed）；
+    # unchanged 是中性结果，不参与分母。旧条目依次回退 evaluated_count/count。
+    decisive = e.get("decisive_count")
+    if not isinstance(decisive, int) or isinstance(decisive, bool):
+        decisive = e.get("evaluated_count")
+    if not isinstance(decisive, int) or isinstance(decisive, bool):
+        decisive = e.get("count", 0)
+    if not isinstance(decisive, int) or decisive < min_count:
+        return 0.0
+    ratio = e.get("success_ratio")
+    if not isinstance(ratio, (int, float)) or isinstance(ratio, bool):
+        return 0.0
+    ratio = float(ratio)
     prior = round(strength * (ratio - 0.5) * 2.0, 4)
     labels.append(
-        f"策略评价表先验（同类上下文 {e['count']} 次，成功率 {ratio}，{prior:+.2f}）"
+        f"策略评价表先验（同类上下文 {decisive} 次方向明确，成功率 {ratio}，{prior:+.2f}）"
     )
     return prior
 

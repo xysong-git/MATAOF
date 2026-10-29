@@ -64,6 +64,74 @@ class BrokenSession(FakeSession):
         raise ConnectionError("connection refused")
 
 
+class FakeRow:
+    def __init__(self, value):
+        self._value = value
+
+    def get_fields(self):
+        return [self._value]
+
+
+class FakeCountDataset:
+    """COUNT DEVICES 单值结果集。"""
+
+    def __init__(self, value="100"):
+        self._value = value
+        self._done = False
+
+    def has_next(self) -> bool:
+        return not self._done
+
+    def next(self):
+        self._done = True
+        return FakeRow(self._value)
+
+    def close_operation_handle(self):
+        pass
+
+
+class FakeCountSession(FakeSession):
+    """COUNT DEVICES → 固定标量；COUNT_FAIL_ME → 抛异常。"""
+
+    def execute_query_statement(self, sql: str):
+        self.executed.append(sql)
+        if "COUNT_FAIL_ME" in sql:
+            raise RuntimeError("connection reset")
+        if sql.startswith("COUNT DEVICES"):
+            return FakeCountDataset("100")
+        return FakeDataset(rows=3)
+
+
+class FakeDfDataset:
+    """DataFrame 批量结果集（has_next_df/next_df 循环）。"""
+
+    def __init__(self, frames):
+        self._frames = list(frames)
+
+    def has_next_df(self) -> bool:
+        return bool(self._frames)
+
+    def next_df(self):
+        return self._frames.pop(0)
+
+    def close_operation_handle(self):
+        pass
+
+
+class FakeDfSession(FakeSession):
+    """df 消费：一次返回 3 行 × 2 列；FAIL_ME → 抛异常。"""
+
+    def execute_query_statement(self, sql: str):
+        import pandas as pd
+        self.executed.append(sql)
+        if "FAIL_ME" in sql:
+            raise RuntimeError("701: SemanticErrorException: unsupported query")
+        return FakeDfDataset([
+            pd.DataFrame({"Time": [1, 2], "s_0": [0.1, 0.2]}),
+            pd.DataFrame({"Time": [3], "s_0": [0.3]}),
+        ])
+
+
 def _make_executor(**kwargs) -> IoTDBExecutor:
     kwargs.setdefault("session_factory", FakeSession)
     kwargs.setdefault("measure_baseline", False)
@@ -160,6 +228,79 @@ def test_build_executor_iotdb_spec():
 
 
 # ---------------------------------------------------------------------------
+# execute_raw：原生直发双口径（row/df）
+# ---------------------------------------------------------------------------
+
+def test_execute_raw_row_mode_is_row_api():
+    ex = _make_executor()
+    sql = "SELECT s_0 FROM root.test.g_0.d_0 LIMIT 3"
+    r = ex.execute_raw(sql)
+    assert r.execution_status == "success"
+    assert r.metrics["response_time_ms"] >= 0
+    assert "result_rows" not in r.metrics           # row 口径不记行/列数
+    assert ex._sessions[1024].executed == [sql]     # 走 row API 的会话
+    assert ex._plan_sessions == {}                  # 不触碰计划会话池
+    ex.close()
+
+
+def test_execute_raw_df_mode_reports_shape():
+    ex = _make_executor(session_factory=FakeDfSession)
+    sql = "SELECT s_0, s_1 FROM root.test.g_0.d_0"
+    r = ex.execute_raw(sql, result_mode="df")
+    assert r.execution_status == "success"
+    assert r.metrics["result_mode"] == "df"
+    assert r.metrics["result_rows"] == 3            # 2 帧拼接：2 + 1 行
+    assert r.metrics["result_columns"] == 2
+    assert r.metrics["response_time_ms"] >= 0
+    ex.close()
+
+
+def test_execute_raw_df_error_classified():
+    ex = _make_executor(session_factory=FakeDfSession)
+    r = ex.execute_raw("SELECT FAIL_ME FROM root.test.g_0.d_0", result_mode="df")
+    assert r.execution_status == "failed"
+    assert "unsupported" in (r.failure_reason or "")
+    ex.close()
+
+
+def test_execute_raw_rejects_unknown_result_mode():
+    ex = _make_executor()
+    with pytest.raises(ValueError, match="result_mode"):
+        ex.execute_raw("SELECT s_0 FROM root.test.g_0.d_0", result_mode="bogus")
+    ex.close()
+
+
+# ---------------------------------------------------------------------------
+# count_devices：设备清单完整性校验
+# ---------------------------------------------------------------------------
+
+def test_count_devices_returns_scalar():
+    ex = _make_executor(session_factory=FakeCountSession)
+    assert ex.count_devices("root.test.**") == 100
+    assert ex._sessions[1024].executed == ["COUNT DEVICES root.test.**"]
+    ex.close()
+
+
+def test_count_devices_returns_none_when_empty():
+    class EmptySession(FakeCountSession):
+        def execute_query_statement(self, sql):
+            self.executed.append(sql)
+            return FakeCountDataset(value=None)   # has_next True，fields 为 [None]
+
+    ex = _make_executor(session_factory=EmptySession)
+    assert ex.count_devices("root.test.**") is None   # int("None") 失败 → None
+    ex.close()
+
+
+def test_count_devices_propagates_execution_error():
+    # 执行异常向上抛出：由 validate_device_inventory 记录真实原因并降级
+    ex = _make_executor(session_factory=FakeCountSession)
+    with pytest.raises(RuntimeError, match="connection reset"):
+        ex.count_devices("COUNT_FAIL_ME")
+    ex.close()
+
+
+# ---------------------------------------------------------------------------
 # 真实 IoTDB 集成测试（无法连接则跳过，不伪造）
 # ---------------------------------------------------------------------------
 
@@ -197,6 +338,28 @@ def test_real_execution_error_classified():
     # DOUBLE 列与 INT 字面量比较 → 数据库真实报错 → failed + 真实原因
     assert r.execution_status == "failed"
     assert r.failure_reason
+
+
+@REAL_IOTDB
+def test_real_execute_raw_df():
+    ex = IoTDBExecutor(measure_baseline=False)
+    r = ex.execute_raw(
+        "SELECT s_0 FROM root.test.g_0.d_0 WHERE time >= 1640966400000 "
+        "AND time <= 1640966650000", result_mode="df")
+    ex.close()
+    assert r.execution_status == "success"
+    assert r.metrics["result_mode"] == "df"
+    assert r.metrics["result_rows"] >= 0
+    assert r.metrics["result_columns"] >= 1          # Time 列 + 测点列
+    assert r.metrics["response_time_ms"] > 0
+
+
+@REAL_IOTDB
+def test_real_count_devices():
+    ex = IoTDBExecutor(measure_baseline=False)
+    n = ex.count_devices("root.test.**")
+    ex.close()
+    assert isinstance(n, int) and n >= 1
 
 
 @REAL_IOTDB

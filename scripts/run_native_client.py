@@ -6,13 +6,21 @@
 逐条记录客户端墙钟 response_time_ms（发送 → 完整消费结果集）。
 采样逻辑与 agent 模式共用 sample_items（同种子 → 同抽样，实验可复现）。
 
+结果消费双口径（--result-mode）：
+  row：逐行 has_next()/next()，与历史 native baseline 完全一致（默认）；
+  df ：DataFrame 批量 has_next_df()/next_df()，与 agent 计划路径同消费方式。
+同一 SQL、同一客户端，只有消费方式不同——用于隔离“客户端批量读”与
+“决策/计划”各自的贡献（论文双口径报告）。
+
 输出：每个查询文件一个 .jsonl（每行一条查询记录 + 末尾一条 batch 行），
-供 aggregate_native.py 解析。
+供 aggregate_native.py 解析。每条记录带 result_mode；df 额外带
+result_rows/result_columns。
 
 用法：
   python3 scripts/run_native_client.py --file q1.sql --out out.jsonl \
-      [--per-file-limit N] [--sample seq|random] [--seed 42] \
-      [--host 127.0.0.1] [--port 6667] [--user root] [--password root]
+      [--result-mode row|df] [--per-file-limit N] [--sample seq|random] \
+      [--seed 42] [--host 127.0.0.1] [--port 6667] \
+      [--user root] [--password root]
 """
 
 from __future__ import annotations
@@ -32,7 +40,8 @@ from mataof.runner import sample_items, split_sql_statements  # noqa: E402
 
 
 def run_file(executor: IoTDBExecutor, path: str, out_path: str,
-             per_file_limit, sample_mode: str, seed: int) -> int:
+             per_file_limit, sample_mode: str, seed: int,
+             result_mode: str = "row") -> int:
     """执行一个查询文件，逐条写 .jsonl（查询行 + batch 行），返回执行条数。"""
     with open(path, encoding="utf-8") as f:
         text = f.read()
@@ -47,13 +56,16 @@ def run_file(executor: IoTDBExecutor, path: str, out_path: str,
         os.makedirs(out_dir, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as out:
         for i, stmt in enumerate(statements):
-            result = executor.execute(stmt, f"{name}-{i:04d}", {})
+            result = executor.execute_raw(stmt, result_mode=result_mode)
             row = {
                 "query_id": f"{name}-{i:04d}",
                 "query": stmt,
                 "execution_status": result.execution_status,
                 "response_time_ms": result.metrics.get("response_time_ms"),
                 "failure_reason": result.failure_reason,
+                "result_mode": result_mode,
+                "result_rows": result.metrics.get("result_rows"),
+                "result_columns": result.metrics.get("result_columns"),
                 "cpu_utilization": result.metrics.get("cpu_utilization"),
                 "cpu_utilization_peak": result.metrics.get("cpu_utilization_peak"),
                 "memory_utilization": result.metrics.get("memory_utilization"),
@@ -76,6 +88,9 @@ def main(argv=None) -> int:
                    help="每个文件取样条数（默认全量；与 agent 模式同语义）")
     p.add_argument("--sample", choices=["seq", "random"], default="seq")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--result-mode", choices=["row", "df"], default="row",
+                   help="结果消费方式：row=逐行（历史 native 口径，默认）/ "
+                        "df=DataFrame 批量（与 agent 计划同口径）")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=6667)
     p.add_argument("--user", default="root")
@@ -86,10 +101,10 @@ def main(argv=None) -> int:
                              password=args.password, measure_baseline=False)
     try:
         n = run_file(executor, args.file, args.out, args.per_file_limit,
-                     args.sample, args.seed)
+                     args.sample, args.seed, args.result_mode)
     finally:
         executor.close()
-    print(f"[native] {os.path.basename(args.file)}: {n} 条 → {args.out}")
+    print(f"[native:{args.result_mode}] {os.path.basename(args.file)}: {n} 条 → {args.out}")
     return 0
 
 

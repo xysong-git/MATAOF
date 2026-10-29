@@ -174,6 +174,30 @@ def test_retrieve_empty_store():
     assert r["knowledge_confidence"] == 0.0
 
 
+def test_sqlite_signature_cache_refreshes_on_new_executions(tmp_path):
+    # 签名聚合：同一签名追加执行时签名数不变，但检索缓存必须刷新
+    # 执行计数与平均延迟（否则学习闭环会一直读到第一次执行的旧统计）。
+    path = str(tmp_path / "k.db")
+    km = KnowledgeMemoryAgent(store_path=path, backend="sqlite")
+    _ingest(km, "q1", NARROW_Q, SID_PRUNE, PRUNE,
+            {"response_time_ms": 10.0}, {"response_time_ms": 50.0})
+    r1 = km.retrieve(analyze(NARROW_Q, query_id="peek1"),
+                     max_records=10, summary=False)
+    recs1 = r1["matched_records_for_decision"]
+    assert len(recs1) == 1
+    assert recs1[0]["count"] == 1
+    assert recs1[0]["execution_feedback"]["latency_ms"] == 10.0
+
+    _ingest(km, "q2", NARROW_Q, SID_PRUNE, PRUNE,
+            {"response_time_ms": 20.0}, {"response_time_ms": 50.0})
+    r2 = km.retrieve(analyze(NARROW_Q, query_id="peek2"),
+                     max_records=10, summary=False)
+    recs2 = r2["matched_records_for_decision"]
+    assert len(recs2) == 1
+    assert recs2[0]["count"] == 2
+    assert recs2[0]["execution_feedback"]["latency_ms"] == 15.0
+
+
 def test_retrieve_tiers_and_summary():
     km = KnowledgeMemoryAgent()
     _seed(km)

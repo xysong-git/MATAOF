@@ -232,6 +232,9 @@ def test_decision_mode_llm_primary_wiring(tmp_path, monkeypatch):
         results_dir=str(tmp_path),
         llm={"provider": "none", "decision_mode": "llm_primary",
              "async_enhance": True, "sample_rate": 10},
+        # 本测试只验证 LLM 决策接线；关闭 Agent 自动计划生成，避免
+        # 计划对 fetch_size 的权威覆盖掩盖 LLM 选择。
+        planning={"enabled": False},
         run_id="dm",
     ))
     assert runner._llm_decide is True

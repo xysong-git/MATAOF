@@ -9,6 +9,12 @@
   "baseline_strategy": null,
   "thresholds": {},
   "reference_time": null,
+  "agent": {
+    "enabled": false,
+    "max_attempts": 2,
+    "deadline_ms": 30000,
+    "replan_on": ["degraded", "failed"]
+  },
   "llm": {
     "provider": "none",
     "base_url": "https://api.example.com/v1",

@@ -12,8 +12,12 @@
 相似度公式（确定性，全部基于输入数据，无任何编造）：
     similarity = 0.6 * sim_query + 0.25 * sim_db + 0.15 * sim_system
 - sim_query：对摘要特征逐项加权（类别相等 1/0；数值用 min/max 比例；缺失双方 0.5、
-  单方缺失 0.3；函数集合用 Jaccard）；
+  单方缺失 0.3；函数/测点集合用 Jaccard）；
 - sim_db / sim_system：仅对双方都提供的键比较；无共同键 → 0.5（中性）。
+
+"同查询形状"（same_query_shape）是比相似度更严的确定性判定：除时间跨度允许
+10% 波动外，全部查询特征完全一致（含窗口间隔与测点指纹）。用于"样本充分时
+优先采用同形状实测证据"，避免近邻形状（如 q3/q10、q7/q11）的延迟互相稀释。
 """
 
 from __future__ import annotations
@@ -27,6 +31,24 @@ SIM_WEIGHT_DB = 0.25
 SIM_WEIGHT_SYSTEM = 0.15
 DECAY_HALF_LIFE_HOURS = 72.0
 
+# baseline 计划是"安全动作"，只在没有更优计划时才执行，因此它的历史样本
+# 可能很少且偏冷启动（例如某查询形状只执行过一次 baseline，耗时 1542ms，
+# 而常态是 12ms）。少于 MIN_BASELINE_SAMPLES 次，或不足参照样本量的
+# BASELINE_SAMPLE_SHARE，视为不充分：该 baseline 历史不能代表查询形状常态。
+MIN_BASELINE_SAMPLES = 3
+BASELINE_SAMPLE_SHARE = 0.10
+
+# 同查询形状判定：时间跨度随查询语句不同有细微差异（数据相关），
+# 允许 10% 相对波动；其余特征要求完全一致。
+SHAPE_TIME_SPAN_TOLERANCE = 0.10
+
+
+def baseline_sample_adequate(baseline_count: int, reference_count: int) -> bool:
+    """baseline 历史样本是否足以代表查询形状常态（监控与决策共用口径）。"""
+    return (baseline_count >= MIN_BASELINE_SAMPLES
+            and baseline_count >= reference_count * BASELINE_SAMPLE_SHARE)
+
+
 _QUERY_FIELDS = (
     ("query_type", "categorical", 0.15),
     ("time.has_time_filter", "categorical", 0.10),
@@ -38,7 +60,12 @@ _QUERY_FIELDS = (
     ("aggregation.has_aggregation", "categorical", 0.10),
     ("aggregation.has_group_by", "categorical", 0.05),
     ("aggregation.has_window", "categorical", 0.05),
+    ("aggregation.window_interval_ms", "optional_numeric", 0.08),
     ("aggregation.functions", "jaccard", 0.10),
+    # 测点指纹：值过滤列 + 聚合参数归一化后的测点名集合。
+    # 区分 q3/q10 这类结构相同、测点不同的查询；跨规模时测点名不同，
+    # 只损失这一项权重，仍高于相似度阈值（跨规模共享仍可用）。
+    ("measurements", "set", 0.10),
 )
 
 
@@ -71,6 +98,41 @@ def _numeric_sim(a: Any, b: Any) -> float:
     return min(a, b) / max(a, b)
 
 
+def _optional_numeric_sim(a: Any, b: Any) -> float:
+    """可选数值属性（如窗口间隔）：双方都没有该属性 = 同形（无窗口），返回 1.0。"""
+    a_ok = isinstance(a, (int, float)) and not isinstance(a, bool)
+    b_ok = isinstance(b, (int, float)) and not isinstance(b, bool)
+    if not a_ok and not b_ok:
+        return 1.0
+    if not a_ok or not b_ok:
+        return 0.3   # 单方缺失：可能是不支持该特征的旧记录，不可比
+    return _numeric_sim(a, b)
+
+
+def _as_set(value: Any) -> Optional[set]:
+    if isinstance(value, (list, set, tuple)):
+        return set(value)
+    return None
+
+
+def _set_sim(a: Any, b: Any) -> float:
+    """集合相似度（Jaccard）；None/空集合表示该记录不具备此特征（未知）。
+
+    双方都未知 → 1.0（没有可比较的差异，不能凭空判为不同）；
+    单方未知 → 0.3（旧记录/未提取，不可比）；双方都有 → Jaccard。
+    """
+    sa, sb = _as_set(a), _as_set(b)
+    if sa is not None and not sa:
+        sa = None
+    if sb is not None and not sb:
+        sb = None
+    if sa is None and sb is None:
+        return 1.0
+    if sa is None or sb is None:
+        return 0.3
+    return len(sa & sb) / len(sa | sb)
+
+
 def _jaccard_sim(a: Any, b: Any) -> float:
     sa = set(a) if isinstance(a, (list, set, tuple)) else set()
     sb = set(b) if isinstance(b, (list, set, tuple)) else set()
@@ -89,6 +151,10 @@ def _similarity_query(current: dict, record: dict) -> float:
             s = _categorical_sim(a, b)
         elif kind == "numeric":
             s = _numeric_sim(a, b)
+        elif kind == "optional_numeric":
+            s = _optional_numeric_sim(a, b)
+        elif kind == "set":
+            s = _set_sim(a, b)
         else:
             s = _jaccard_sim(a, b)
         total_w += w
@@ -124,10 +190,63 @@ def _similarity_system(current_sys: dict, record_sys: dict) -> float:
     return 0.5
 
 
+def _last_path_segment(value: Any) -> Optional[str]:
+    """取列引用最后一段（root.a.d.s_1 → s_1）；非标识符（字面量/表达式）→ None。"""
+    if not isinstance(value, str):
+        return None
+    seg = value.strip().rsplit(".", 1)[-1]
+    if not seg or not (seg[0].isalpha() or seg[0] == "_"):
+        return None
+    if not all(ch.isalnum() or ch == "_" for ch in seg):
+        return None
+    return seg
+
+
+def _measurement_columns(filter_section: dict, agg_section: dict) -> Optional[list]:
+    """测点指纹：值过滤列 + 聚合参数中的测点名（去设备前缀，排序去重）。
+
+    设备路径逐查询不同（d_81/d_94…），不能进入形状特征；测点名是查询语句
+    的稳定属性，用于区分结构相同但测点不同的查询（q3 vs q10）。
+    两项都没有 → None（未知，不是"空集合"）。
+    """
+    names: set = set()
+    for cond in filter_section.get("conditions") or []:
+        if isinstance(cond, dict) and cond.get("type") == "value":
+            seg = _last_path_segment(cond.get("column"))
+            if seg:
+                names.add(seg)
+    for rec in agg_section.get("aggregation_functions") or []:
+        if not isinstance(rec, dict):
+            continue
+        for arg in rec.get("args") or []:
+            seg = _last_path_segment(arg)
+            if seg:
+                names.add(seg)
+    return sorted(names) if names else None
+
+
+def _window_interval_ms(agg_section: dict) -> Optional[int]:
+    """窗口 GROUP BY 的间隔（毫秒）；无窗口/旧记录 → None。"""
+    details = agg_section.get("group_by_details") or {}
+    if not isinstance(details, dict):
+        return None
+    if details.get("type") == "time_window":
+        v = (details.get("window") or {}).get("interval_ms")
+    elif details.get("type") == "time_function":
+        v = details.get("interval_ms")
+    else:
+        return None
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return v
+    return None
+
+
 def compact_features(analysis: dict) -> dict:
     """把 Query Analysis Agent 输出压缩为历史记录契约中的 query_features 摘要。
 
     历史记录与检索均使用该摘要做相似度计算（口径一致，见 HISTORICAL_RECORD_CONTRACT）。
+    摘要包含测点指纹与窗口间隔：仅靠查询类型/跨度/设备数无法区分
+    q3/q10（测点与过滤值不同）和 q7/q11（窗口间隔/聚合函数不同）这类近邻形状。
     """
     f = analysis.get("query_features") or {}
     t = f.get("time") or {}
@@ -153,9 +272,83 @@ def compact_features(analysis: dict) -> dict:
             "has_aggregation": bool(agg.get("has_aggregation")),
             "has_group_by": bool(agg.get("has_group_by")),
             "has_window": bool(agg.get("has_window")),
+            "window_interval_ms": _window_interval_ms(agg),
             "functions": sorted({r.get("function") for r in agg.get("aggregation_functions") or []}),
         },
+        "measurements": _measurement_columns(fl, agg),
     }
+
+
+# 同形状判定要求完全一致的字段（与 compact_features 布局一一对应）。
+_SHAPE_EXACT_PATHS = (
+    "query_type",
+    "time.has_time_filter", "time.range_level",
+    "device.multi_device", "device.device_count",
+    "filter.non_time_filter_count",
+    "aggregation.has_aggregation", "aggregation.has_group_by",
+    "aggregation.has_window", "aggregation.window_interval_ms",
+)
+_SHAPE_SET_PATHS = ("aggregation.functions", "measurements")
+
+
+def _shape_set(value: Any) -> Optional[set]:
+    """形状判定用的集合：空集合与缺失同义（该记录不具备此特征）。"""
+    return _as_set(value) or None
+
+
+def _close_span(a: Any, b: Any,
+                tolerance: float = SHAPE_TIME_SPAN_TOLERANCE) -> bool:
+    a_ok = isinstance(a, (int, float)) and not isinstance(a, bool)
+    b_ok = isinstance(b, (int, float)) and not isinstance(b, bool)
+    if not a_ok and not b_ok:
+        return True          # 双方都没有时间跨度（无时间过滤）→ 同形
+    if not a_ok or not b_ok:
+        return False
+    if a == b:
+        return True
+    if a <= 0 or b <= 0:
+        return False
+    return min(a, b) / max(a, b) >= 1.0 - tolerance
+
+
+def same_query_shape(a: dict, b: dict) -> bool:
+    """两份 compact 查询特征是否描述同一查询形状（比相似度更严的确定性判定）。
+
+    - 类别/计数/窗口间隔：完全一致；
+    - 聚合函数集合、测点指纹：集合一致；
+    - 时间跨度：允许 SHAPE_TIME_SPAN_TOLERANCE 的相对波动（随查询语句不同）。
+    """
+    a = a or {}
+    b = b or {}
+    for path in _SHAPE_EXACT_PATHS:
+        if _get_path(a, path) != _get_path(b, path):
+            return False
+    for path in _SHAPE_SET_PATHS:
+        if _shape_set(_get_path(a, path)) != _shape_set(_get_path(b, path)):
+            return False
+    return _close_span(_get_path(a, "time.time_span"),
+                       _get_path(b, "time.time_span"))
+
+
+def same_database_context(current_db: dict, record_db: dict) -> bool:
+    """数据规模上下文是否一致（同形状证据的上下文门槛）。
+
+    优先比较 data_scale_level；双方都未提供时退回 device_scale（10% 容差）。
+    任何一方未知而另一方已知 → 不一致（不能把未知当作同规模）。
+    """
+    current_db = current_db or {}
+    record_db = record_db or {}
+    a = current_db.get("data_scale_level")
+    b = record_db.get("data_scale_level")
+    if a is not None or b is not None:
+        return a == b
+    av = current_db.get("device_scale")
+    bv = record_db.get("device_scale")
+    a_ok = isinstance(av, (int, float)) and not isinstance(av, bool) and av > 0
+    b_ok = isinstance(bv, (int, float)) and not isinstance(bv, bool) and bv > 0
+    if a_ok and b_ok:
+        return min(av, bv) / max(av, bv) >= 0.90
+    return av is None and bv is None
 
 
 def _record_parts(record: dict) -> tuple:
@@ -265,6 +458,23 @@ class HistoryEvidence:
         total_w = sum(w for w, _ in items)
         return sum(w * lat for w, lat in items) / total_w if total_w else None
 
+    def total_count(self, dim: str) -> int:
+        """该维度上有取值的全部执行数（按记录覆盖执行数累计）。"""
+        return sum(u["count"] for u in self.used
+                   if u["record"]["strategy"].get(dim) is not None)
+
+    def weighted_latency_all(self, dim: str,
+                             exclude: Optional[str] = None) -> Optional[float]:
+        """该维度全部（或排除某取值后）记录的加权实测延迟。"""
+        items = [(u["weight"] * u["count"],
+                  u["record"]["execution_feedback"]["latency_ms"])
+                 for u in self.used
+                 if u["record"]["strategy"].get(dim) is not None
+                 and (exclude is None
+                      or u["record"]["strategy"].get(dim) != exclude)]
+        total_w = sum(w for w, _ in items)
+        return sum(w * lat for w, lat in items) / total_w if total_w else None
+
     def total_weight(self, dim: str) -> float:
         return min(1.0, sum(
             u["weight"] * u["count"] for u in self.used
@@ -310,6 +520,30 @@ def build_history_evidence(records: list, current_compact: dict, current_db: dic
     return ev
 
 
+def same_shape_evidence(ev: HistoryEvidence, current_compact: dict,
+                        current_db: dict,
+                        min_count: int = MIN_BASELINE_SAMPLES
+                        ) -> Optional[HistoryEvidence]:
+    """同查询形状 + 同数据规模的证据子集；样本不足 → None（退回全部相似证据）。
+
+    "同形状"由 same_query_shape 判定（含测点指纹/窗口间隔），比相似度阈值更严：
+    q3 与 q10、q7 与 q11 这类近邻形状不会互相充当对方的历史参照。
+    至少 MIN_BASELINE_SAMPLES 次实测才采用——单次结果不当规律。
+    """
+    if not current_compact:
+        return None
+    items = []
+    for u in ev.used:
+        qf, db, _sy = _record_parts(u["record"])
+        if (same_query_shape(current_compact, qf)
+                and same_database_context(current_db, db)):
+            items.append(u)
+    if sum(u["count"] for u in items) < min_count:
+        return None
+    return HistoryEvidence(used=items, below_threshold=ev.below_threshold,
+                           invalid=ev.invalid)
+
+
 # ---------------------------------------------------------------------------
 # 向量化相似度（路线 2：大知识库下替代逐条 Python 循环）
 # ---------------------------------------------------------------------------
@@ -326,9 +560,12 @@ _CAT_FIELDS = (
 )
 _NUM_FIELDS = (
     ("time_span", 0.10), ("device_count", 0.05), ("non_time_count", 0.10),
+    ("window_interval_ms", 0.08),
 )
 _FUNC_WEIGHT = 0.10
-_QUERY_TOTAL_W = sum(w for _, w in _CAT_FIELDS) + sum(w for _, w in _NUM_FIELDS) + _FUNC_WEIGHT
+_MEAS_WEIGHT = 0.10
+_QUERY_TOTAL_W = (sum(w for _, w in _CAT_FIELDS) + sum(w for _, w in _NUM_FIELDS)
+                  + _FUNC_WEIGHT + _MEAS_WEIGHT)
 
 
 def _extract_cat(compact: dict, field: str):
@@ -362,7 +599,16 @@ def _extract_num(compact: dict, field: str):
     if field == "non_time_count":
         v = (compact.get("filter") or {}).get("non_time_filter_count")
         return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    if field == "window_interval_ms":
+        v = (compact.get("aggregation") or {}).get("window_interval_ms")
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
     return None
+
+
+def _measurements_of(compact: dict) -> Optional[set]:
+    """测点指纹集合；None = 该记录不具备此特征（未知，含空集合）。"""
+    s = _as_set((compact or {}).get("measurements"))
+    return s or None
 
 
 def _code_of(value, code_map: dict, next_code: list) -> int:
@@ -377,11 +623,12 @@ def _code_of(value, code_map: dict, next_code: list) -> int:
 
 
 def encode_vector_row(record_parts: tuple, code_maps: list, next_code: list,
-                      func_dict: list) -> tuple:
-    """把一条记录编码为矩阵行：返回 (cat_codes, num_values, func_set)。
+                      func_dict: list, meas_dict: list) -> tuple:
+    """把一条记录编码为矩阵行：返回 (cat_codes, num_values, func_set, meas_set)。
 
     record_parts = (query_features_compact, database_state, system_state)。
     与逐条计算完全一致的取值规则；未知/缺失 → -1 / NaN。
+    meas_set 为 None 表示测点指纹未知（与空集合区分：空集合按 Jaccard=1 处理）。
     """
     qf, db, sy = record_parts
     np = _np()
@@ -401,16 +648,21 @@ def encode_vector_row(record_parts: tuple, code_maps: list, next_code: list,
     for fn in func_set:
         if fn not in func_dict:
             func_dict.append(fn)
-    return cat_codes, num_values, func_set
+    meas_set = _measurements_of(qf)
+    for name in meas_set or ():
+        if name not in meas_dict:
+            meas_dict.append(name)
+    return cat_codes, num_values, func_set, meas_set
 
 
 def build_vector_matrix(store) -> Optional[dict]:
     """从知识库构建（或增量更新）向量矩阵。
 
-    返回 {"records": [...], "cat_codes": N×7 int16, "num_values": N×3 float32,
-          "func_mat": N×D uint8, "func_dict": [...], "code_maps": [...],
-          "db_codes": N×3, "sys_codes": N×1}
+    返回 {"records": [...], "cat_codes": N×7 int16, "num_values": N×4 float32,
+          "func_mat": N×D uint8, "func_dict": [...], "meas_mat": N×M uint8,
+          "meas_dict": [...], "code_maps": [...], "db_codes": N×3, "sys_codes": N×1}
     db_codes 三列：scale_level 码、scale_level 存在位、device_scale 值(NaN=缺失)
+    meas_mat 为测点指纹集合（1 位 = 含该测点；全 0 行 = 指纹未知）。
     """
     np = _np()
     # 缓存命中检查用 O(1) 计数：避免每条查询复制全量记录列表（大库 ~2-4ms/条）。
@@ -420,27 +672,67 @@ def build_vector_matrix(store) -> Optional[dict]:
     n = sig_counter() if sig_counter is not None else store.count()
     if n == 0:
         return None
+    # 已有签名被追加执行时签名数不变，但聚合延迟/执行数/效果分布已变化。
+    # 取出脏签名集合，增量刷新对应行（否则检索会一直读到旧统计）。
+    pop_dirty = getattr(store, "pop_dirty_signatures", None)
+    dirty = pop_dirty() if (mat is not None and pop_dirty is not None) else set()
+
+    def _row_map(m: dict) -> dict:
+        rm = m.get("row_by_id")
+        if rm is None:
+            rm = {r["record_id"]: i for i, r in enumerate(m["records"])}
+            m["row_by_id"] = rm
+        return rm
+
+    def _refresh(m: dict) -> bool:
+        """刷新脏签名对应行（records + totals）；无法定位 → False（全量重建）。"""
+        rm = _row_map(m)
+        for sid in dirty:
+            idx = rm.get(sid)
+            rec = store.signature_record(sid) if hasattr(store, "signature_record") else None
+            if rec is None or idx is None:
+                return False
+            m["records"][idx] = rec
+            m["totals"][idx] = int(rec.get("execution_count") or 1)
+        # 展示路径的投影行缓存也含动态字段 → 失效（下次按当前状态重建）
+        if hasattr(store, "_agg_rows"):
+            delattr(store, "_agg_rows")
+        return True
+
     if mat is not None and mat.get("_len") == n:
-        return mat
+        if not dirty:
+            return mat
+        if _refresh(mat):
+            store._vec_mat = mat
+            return mat
+        mat = None   # 脏签名不在缓存行中 → 全量重建
+
     start = mat["_len"] if mat is not None else 0
     # 增量重建只取新增条目（签名存储下每次新增都触发重建——
     # 全量合成记录构建是 O(N) 且昂贵，必须只取增量）
     records = store.all(start=start) if start else store.all()
     if mat is not None:
         mat["records"].extend(records)   # 原地扩展，保留旧引用（不再整表替换）
+        rm = _row_map(mat)
+        for j, rec in enumerate(records):
+            rm[rec["record_id"]] = start + j
+        mat["row_by_id"] = rm
     # code_maps：7 个查询类别字段 + db 的 scale_level + sys 的 load_level 共 9 张
     code_maps = mat["code_maps"] if mat is not None else [{} for _ in range(len(_CAT_FIELDS) + 2)]
     next_code = [max((max(m.values(), default=-1) + 1) for m in code_maps)]
     func_dict = list(mat["func_dict"]) if mat is not None else []
     old_func_len = len(func_dict)
+    meas_dict = list(mat["meas_dict"]) if mat is not None else []
 
-    new_cats, new_nums, new_funcs = [], [], []
+    new_cats, new_nums, new_funcs, new_meas = [], [], [], []
     for rec in records:   # records 在增量时为"仅新增"切片
         parts = _record_parts(rec)
-        c, v, fs = encode_vector_row(parts, code_maps, next_code, func_dict)
+        c, v, fs, ms = encode_vector_row(parts, code_maps, next_code,
+                                         func_dict, meas_dict)
         new_cats.append(c)
         new_nums.append(v)
         new_funcs.append(fs)
+        new_meas.append(ms)
 
     n_new = n - start
     # totals：每行覆盖的执行数（签名聚合条目 → execution_count；逐条记录 → 1）
@@ -454,6 +746,7 @@ def build_vector_matrix(store) -> Optional[dict]:
         db_codes = np.zeros((n, 3), np.float32)
         sys_codes = np.zeros((n, 1), np.int16)
         func_mat = np.zeros((n, max(len(func_dict), 1)), np.uint8)
+        meas_mat = np.zeros((n, max(len(meas_dict), 1)), np.uint8)
         totals = new_totals if n_new else np.empty(0, np.int64)
     else:
         cat_codes = np.vstack([mat["cat_codes"], np.stack(new_cats)]) if new_cats else mat["cat_codes"]
@@ -471,11 +764,22 @@ def build_vector_matrix(store) -> Optional[dict]:
             func_mat = np.hstack([func_mat, pad])
         if n_new:
             func_mat = np.vstack([func_mat, np.zeros((n_new, len(func_dict) or 1), np.uint8)])
-    # 为新行填函数位
+        # 测点矩阵：与函数矩阵相同的增量拼接规则
+        meas_mat = mat["meas_mat"]
+        if len(meas_dict) > meas_mat.shape[1]:
+            pad = np.zeros((meas_mat.shape[0], len(meas_dict) - meas_mat.shape[1]), np.uint8)
+            meas_mat = np.hstack([meas_mat, pad])
+        if n_new:
+            meas_mat = np.vstack([meas_mat, np.zeros((n_new, len(meas_dict) or 1), np.uint8)])
+    # 为新行填函数位/测点位
     for j, fs in enumerate(new_funcs):
         row_idx = start + j
         for fn in fs:
             func_mat[row_idx, func_dict.index(fn)] = 1
+    for j, ms in enumerate(new_meas):
+        row_idx = start + j
+        for name in ms or ():
+            meas_mat[row_idx, meas_dict.index(name)] = 1
     # db/sys 列：为新行填充
     for j, rec in enumerate(records):
         db = (rec.get("context") or {}).get("database_state") or {}
@@ -496,18 +800,29 @@ def build_vector_matrix(store) -> Optional[dict]:
         "num_values": num_values,
         "func_mat": func_mat,
         "func_dict": func_dict,
+        "meas_mat": meas_mat,
+        "meas_dict": meas_dict,
         "code_maps": code_maps,
         "db_codes": db_codes,
         "sys_codes": sys_codes,
         "totals": totals,
     }
+    mat_new["row_by_id"] = _row_map(mat_new)
+    if dirty:
+        _refresh(mat_new)   # 已有签名的动态统计在本次构建期间也更新了
     store._vec_mat = mat_new
     return mat_new
 
 
 def encode_current_query(current_compact: dict, current_db: dict, current_sys: dict,
-                         code_maps: list, func_dict: list) -> tuple:
-    """把当前查询上下文编码为与矩阵同布局的向量。"""
+                         code_maps: list, func_dict: list,
+                         meas_dict: list) -> tuple:
+    """把当前查询上下文编码为与矩阵同布局的向量。
+
+    返回 (cur_cats, cur_nums, cur_func, cur_func_total,
+          cur_meas, cur_meas_total, cur_meas_known, cur_db, cur_sys)。
+    cur_meas_known=False 表示当前查询的测点指纹未知（与空集合区分）。
+    """
     np = _np()
     next_code = [max((max(m.values(), default=-1) + 1) for m in code_maps)]
     cur_cats = np.empty(len(_CAT_FIELDS), np.int16)
@@ -525,6 +840,13 @@ def encode_current_query(current_compact: dict, current_db: dict, current_sys: d
         if fn in func_dict:
             cur_func[func_dict.index(fn)] = 1.0
     cur_func_total = len(funcs)   # 当前函数总数（含字典外的名字——它们只增大并集）
+    meas = _measurements_of(current_compact or {})
+    cur_meas = np.zeros(max(len(meas_dict), 1), np.float32)
+    for name in meas or ():
+        if name in meas_dict:
+            cur_meas[meas_dict.index(name)] = 1.0
+    cur_meas_total = len(meas) if meas is not None else 0
+    cur_meas_known = meas is not None
     cur_db = np.zeros(3, np.float32)
     db = current_db or {}
     cur_db[0] = _code_of(db.get("data_scale_level"), code_maps[len(_CAT_FIELDS)], next_code)
@@ -533,7 +855,8 @@ def encode_current_query(current_compact: dict, current_db: dict, current_sys: d
     cur_db[2] = float(ds) if isinstance(ds, (int, float)) and not isinstance(ds, bool) else np.nan
     sy = current_sys or {}
     cur_sys = _code_of(sy.get("load_level"), code_maps[len(_CAT_FIELDS) + 1], next_code)
-    return cur_cats, cur_nums, cur_func, cur_func_total, cur_db, cur_sys
+    return (cur_cats, cur_nums, cur_func, cur_func_total, cur_meas,
+            cur_meas_total, cur_meas_known, cur_db, cur_sys)
 
 
 def vectorized_similarities(current_compact: dict, current_db: dict, current_sys: dict,
@@ -544,8 +867,9 @@ def vectorized_similarities(current_compact: dict, current_db: dict, current_sys
     返回未取整的 float32 数组，调用方按需 round。
     """
     np = _np()
-    cur_c, cur_n, cur_f, cur_f_total, cur_db, cur_sys = encode_current_query(
-        current_compact, current_db, current_sys, mat["code_maps"], mat["func_dict"])
+    cur_c, cur_n, cur_f, cur_f_total, cur_m, cur_m_total, cur_m_known, cur_db, cur_sys = \
+        encode_current_query(current_compact, current_db, current_sys,
+                             mat["code_maps"], mat["func_dict"], mat["meas_dict"])
     n = mat["cat_codes"].shape[0]
     q = np.zeros(n, np.float32)
 
@@ -559,12 +883,15 @@ def vectorized_similarities(current_compact: dict, current_db: dict, current_sys
     q += (contrib * cat_w).sum(axis=1)   # 元素级加权求和（避免小 K 矩阵乘的 BLAS 开销）
 
     # ---- 数值字段（逐字段：规则分支多，融合无收益且 where 链更慢）----
-    for i, (_field, w) in enumerate(_NUM_FIELDS):
+    for i, (field, w) in enumerate(_NUM_FIELDS):
         V = mat["num_values"][:, i]
         v = float(cur_n[i])
+        # 可选数值属性（窗口间隔）：双方都缺失 = 同为"无窗口"→ 1.0，
+        # 与 _optional_numeric_sim 保持一致；其余数值字段双方缺失 → 0.5。
+        both_missing = 1.0 if field == "window_interval_ms" else 0.5
         if np.isnan(v):
-            # 当前缺失：记录缺失 → 双方缺失 0.5；记录存在 → 单方缺失 0.3
-            q += w * np.where(np.isnan(V), 0.5, 0.3).astype(np.float32)
+            # 当前缺失：记录缺失 → both_missing；记录存在 → 单方缺失 0.3
+            q += w * np.where(np.isnan(V), both_missing, 0.3).astype(np.float32)
         else:
             # 当前存在：记录缺失 → 单方缺失 0.3（保持 0.3 基准）；其余按规则
             s = np.full(n, 0.3, np.float32)
@@ -584,6 +911,22 @@ def vectorized_similarities(current_compact: dict, current_db: dict, current_sys
     s_f = np.where(union > 0, inter / np.maximum(union, 1e-12),
                    np.where(rowsum == 0, 1.0, 0.0)).astype(np.float32)
     q += _FUNC_WEIGHT * s_f
+
+    # 测点指纹：与 _set_sim 一致——记录全 0 行 = 未知；
+    # 双方未知 1.0（无差异可比较）、单方未知 0.3、已知集合按 Jaccard。
+    M = mat["meas_mat"].astype(np.float32)
+    rowsum_m = M.sum(axis=1)
+    row_unknown_m = rowsum_m == 0
+    if not cur_m_known:
+        s_m = np.where(row_unknown_m, 1.0, 0.3).astype(np.float32)
+    else:
+        inter_m = M @ cur_m
+        union_m = rowsum_m + cur_m_total - inter_m
+        s_m = np.where(row_unknown_m, 0.3,
+                       np.where(union_m > 0,
+                                inter_m / np.maximum(union_m, 1e-12),
+                                1.0)).astype(np.float32)
+    q += _MEAS_WEIGHT * s_m
     q /= _QUERY_TOTAL_W
 
     # ---- database ----

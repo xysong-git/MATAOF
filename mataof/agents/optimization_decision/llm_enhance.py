@@ -61,25 +61,61 @@ def _context_summary(decision_input: dict) -> dict:
     }
 
 
+def _plan_digest(decision_input: dict) -> list:
+    """候选计划摘要（只含结构事实，不含建议；无计划候选 → 空列表）。"""
+    plans = decision_input.get("candidate_plans")
+    if not isinstance(plans, list):
+        return []
+    return [{
+        "plan_id": p.get("plan_id"),
+        "family": p.get("family"),
+        "parts": len(p.get("subqueries") or []),
+        "risk": p.get("risk"),
+        "equivalence": p.get("equivalence"),
+    } for p in plans[:24] if isinstance(p, dict)]
+
+
+def _preferences_skeleton() -> str:
+    """偏好输出的 JSON 骨架（维度名来自 DIMENSIONS，避免提示词与目录漂移）。"""
+    body = ", ".join(f'"{d}": [按你的偏好排序的候选策略名，可空数组]'
+                     for d in DIMENSIONS)
+    return "{" + body + "}"
+
+
 def build_preferences_prompt(decision_input: dict) -> str:
     return (
         "决策上下文：\n" + json.dumps(_context_summary(decision_input), ensure_ascii=False) + "\n\n"
+        "候选计划（如非空，决策 Agent 会独立做成本选择）：\n"
+        + json.dumps(_plan_digest(decision_input), ensure_ascii=False, sort_keys=True)
+        + "\n\n"
         "请输出 JSON：\n"
-        '{"preferences": {"time_pruning": [按你的偏好排序的候选策略名，可空数组], '
-        '"filter_order": [...], "aggregation_placement": [...]}}\n'
+        '{"preferences": ' + _preferences_skeleton() + "}\n"
         "只使用候选列表中出现的策略名；不适用维度给空数组。"
     )
 
 
 def build_reason_prompt(decision_input: dict, decision_output: dict) -> str:
     selected = decision_output.get("decision") or {}
+    decision_view = {d: {"strategy": selected.get(d, {}).get("strategy"),
+                         "reason": selected.get(d, {}).get("reason"),
+                         "confidence": selected.get(d, {}).get("confidence")}
+                     for d in DIMENSIONS}
+    if isinstance(selected.get("plan"), dict):
+        decision_view["plan"] = {
+            "strategy": selected["plan"].get("strategy"),
+            "reason": selected["plan"].get("reason"),
+            "confidence": selected["plan"].get("confidence"),
+            "family": selected["plan"].get("family"),
+            "predicted_ms": selected["plan"].get("predicted_ms"),
+            "saving_ms": selected["plan"].get("saving_ms"),
+        }
     return (
         "决策上下文：\n" + json.dumps(_context_summary(decision_input), ensure_ascii=False) + "\n\n"
+        "候选计划（如非空，决策 Agent 会独立做成本选择）：\n"
+        + json.dumps(_plan_digest(decision_input), ensure_ascii=False, sort_keys=True)
+        + "\n\n"
         "最终决策：\n" + json.dumps({
-            "decision": {d: {"strategy": selected.get(d, {}).get("strategy"),
-                             "reason": selected.get(d, {}).get("reason"),
-                             "confidence": selected.get(d, {}).get("confidence")}
-                         for d in DIMENSIONS},
+            "decision": decision_view,
             "selected_strategy": decision_output.get("selected_strategy"),
             "overall_confidence": decision_output.get("overall_confidence"),
             "decision_status": decision_output.get("decision_status"),
@@ -87,8 +123,7 @@ def build_reason_prompt(decision_input: dict, decision_output: dict) -> str:
         "请输出 JSON：\n"
         '{"semantic_reason": "<150字以内，中文，解读为何做出该决策、依据了什么证据、'
         '明确表述为当前信息条件下的选择>",\n'
-        ' "preferences": {"time_pruning": [...], "filter_order": [...], '
-        '"aggregation_placement": [...]}}\n'
+        ' "preferences": ' + _preferences_skeleton() + "}\n"
         "preferences 只使用候选列表中的策略名；不适用维度给空数组。"
     )
 
@@ -283,10 +318,11 @@ def build_decision_prompt(decision_input: dict, candidates: dict) -> str:
                      sort_keys=True)
         + "\n\n"
         "请输出 JSON：\n"
-        '{"decisions": {"time_pruning": "候选名或null", "filter_order": "...", '
-        '"aggregation_placement": "..."}, '
-        '"reasons": {"维度名": "<50字以内的选择理由>", ...}}\n'
-        "只使用候选列表中出现的策略名；不适用维度 decisions 给 null。"
+        + json.dumps({
+            "decisions": {d: "候选名或null" for d in DIMENSIONS},
+            "reasons": {"维度名": "<50字以内的选择理由>"},
+        }, ensure_ascii=False)
+        + "\n只使用候选列表中出现的策略名；不适用维度 decisions 给 null。"
     )
 
 

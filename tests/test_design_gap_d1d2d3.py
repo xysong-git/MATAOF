@@ -20,6 +20,7 @@ from mataof.agents.query_analysis.vectorize import (  # noqa: E402
 from mataof.agents.optimization_decision import decide  # noqa: E402
 from mataof.agents.optimization_decision.scoring import _evaluation_prior  # noqa: E402
 from mataof.agents.knowledge_memory import KnowledgeMemoryAgent  # noqa: E402
+from mataof.agents.execution_monitoring import monitor  # noqa: E402
 from mataof.runner import PipelineRunner, RunnerConfig  # noqa: E402
 
 NARROW_Q = ("SELECT s_0 FROM root.test.d_0 WHERE time >= 1640966405000 "
@@ -75,7 +76,8 @@ def test_feature_vector_deterministic():
 # D1：策略评价表与动态权重
 # ---------------------------------------------------------------------------
 
-def _ingest(km, query_id="q1", q=NARROW_Q, metrics=None, baseline=None):
+def _ingest(km, query_id="q1", q=NARROW_Q, metrics=None, baseline=None,
+            use_baseline=True):
     analysis = analyze(q, query_id=query_id)
     decision = {"selected_strategy": {
         "strategy_id": "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable",
@@ -83,13 +85,14 @@ def _ingest(km, query_id="q1", q=NARROW_Q, metrics=None, baseline=None):
         "decision": {"time_pruning": {"strategy": "partition_pruning"},
                      "filter_order": {"strategy": "not_applicable"},
                      "aggregation_placement": {"strategy": "not_applicable"}}}
-    from mataof.agents.execution_monitoring import monitor
-    feedback = monitor({
+    monitoring_input = {
         "query_id": query_id, "strategy_id": decision["selected_strategy"]["strategy_id"],
         "execution_status": "success",
         "metrics": metrics or {"response_time_ms": 10.0},
-        "baseline_metrics": baseline or {"response_time_ms": 50.0},
-    })
+    }
+    if use_baseline:
+        monitoring_input["baseline_metrics"] = baseline or {"response_time_ms": 50.0}
+    feedback = monitor(monitoring_input)
     return km.update({"query_id": query_id, "query": q, "query_analysis": analysis,
                       "decision": decision, "monitoring": feedback})
 
@@ -103,6 +106,45 @@ def test_evaluation_table_accumulates():
     assert evals[key]["success_ratio"] == 1.0
     # update 输出包含评价表增量
     assert key in r["strategy_evaluation_updates"]
+
+
+def test_insufficient_evidence_not_counted_as_evaluated():
+    # 证据不足是“未观测”，不是“策略失败”：不进入成功率分母。
+    km = KnowledgeMemoryAgent()
+    _ingest(km, query_id="q0", use_baseline=False)   # 无 baseline/历史 → insufficient
+    _ingest(km, query_id="q1")                       # baseline 50ms vs 实测 10ms → improved
+    key = "range_query|time_pruning|partition_pruning"
+    e = km.store.evaluations()[key]
+    assert e["count"] == 2
+    assert e["evaluated_count"] == 1
+    assert e["insufficient_count"] == 1
+    assert e["success"] == 1
+    assert e["success_ratio"] == 1.0
+    sid = "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable"
+    s = km.stats()["strategy_statistics"][sid]
+    assert s["total"] == 2 and s["evaluated_count"] == 1
+    assert s["success_ratio"] == 1.0
+
+
+def test_unchanged_is_neutral_not_failure():
+    # unchanged（无提升也无退化）是中性结果：计入 evaluated，但不进入
+    # 成功率分母，也不应触发评价表惩罚（否则稳定策略会被误判为失败）。
+    km = KnowledgeMemoryAgent()
+    _ingest(km, query_id="q1", metrics={"response_time_ms": 10.0},
+            baseline={"response_time_ms": 10.0})
+    key = "range_query|time_pruning|partition_pruning"
+    e = km.store.evaluations()[key]
+    assert e["count"] == 1 and e["evaluated_count"] == 1
+    assert e["success"] == 0 and e["failure"] == 0 and e["unchanged_count"] == 1
+    assert e["decisive_count"] == 0 and e["success_ratio"] is None
+    sid = "time_pruning=partition_pruning|filter_order=not_applicable|aggregation_placement=not_applicable"
+    s = km.stats()["strategy_statistics"][sid]
+    assert s["unchanged_count"] == 1 and s["decisive_count"] == 0
+    assert s["success_ratio"] is None
+    # 评价表先验：无方向明确样本 → 不加分也不惩罚
+    assert _evaluation_prior(
+        type("Ctx", (), {"query_type": "range_query"})(),
+        {key: e}, "time_pruning", "partition_pruning", [], 0.10, 3) == 0.0
 
 
 def test_evaluation_table_persists(tmp_path):
@@ -138,6 +180,18 @@ def test_evaluation_prior_function():
     evals["range_query|time_pruning|partition_pruning"]["count"] = 2
     assert _evaluation_prior(_Ctx(), evals, "time_pruning", "partition_pruning",
                              [], strength=0.10, min_count=3) == 0.0
+    # count 很大但多数是证据不足 → 已评估样本不足，仍不产生先验
+    evals["range_query|time_pruning|partition_pruning"] = {
+        "count": 100, "evaluated_count": 2, "success": 1,
+        "success_ratio": 0.5, "avg_latency_ms": 20.0}
+    assert _evaluation_prior(_Ctx(), evals, "time_pruning", "partition_pruning",
+                             [], strength=0.10, min_count=3) == 0.0
+    # 已评估样本达标 → 按已评估成功率产生先验
+    evals["range_query|time_pruning|partition_pruning"] = {
+        "count": 100, "evaluated_count": 3, "success": 3,
+        "success_ratio": 1.0, "avg_latency_ms": 20.0}
+    assert _evaluation_prior(_Ctx(), evals, "time_pruning", "partition_pruning",
+                             [], strength=0.10, min_count=3) == 0.10
 
 
 def test_decision_uses_evaluation_prior():

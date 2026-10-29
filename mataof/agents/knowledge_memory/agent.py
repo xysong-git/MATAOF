@@ -167,15 +167,20 @@ class KnowledgeMemoryAgent:
         success_record = effect == "improved"
 
         priority_change = None
-        if sid and before and after:
-            delta = after["success_ratio"] - before["success_ratio"]
+        b_ratio = before.get("success_ratio") if before else None
+        a_ratio = after.get("success_ratio") if after else None
+        # 无方向明确样本（或全为 unchanged）时 success_ratio 为 None
+        # （证据不足/中性结果不计入分母）→ 不计算变化
+        if (sid and isinstance(b_ratio, (int, float)) and not isinstance(b_ratio, bool)
+                and isinstance(a_ratio, (int, float)) and not isinstance(a_ratio, bool)):
+            delta = a_ratio - b_ratio
             if delta >= PRIORITY_CHANGE_DELTA:
                 priority_change = "increased"
             elif delta <= -PRIORITY_CHANGE_DELTA:
                 priority_change = "decreased"
             if priority_change:
                 notes.append(
-                    f"策略 {sid} 累计成功率 {before['success_ratio']} → {after['success_ratio']}，"
+                    f"策略 {sid} 累计成功率 {b_ratio} → {a_ratio}，"
                     f"优先级变化：{priority_change}"
                 )
 

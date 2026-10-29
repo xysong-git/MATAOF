@@ -212,8 +212,16 @@ def optimization_decision_output_template() -> dict:
     """返回 Optimization Decision Agent 输出模板的全新深拷贝。
 
     字段语义、决策状态枚举与置信度公式见 docs/optimization-decision-agent.md。
-    equivalent_sql 为混合模型输出：等价 SQL 由候选提供方随候选携带，
+    equivalent_sql 为混合模型输出：等价 SQL 由候选生成器随候选携带，
     决策 Agent 只负责选择、不生成/改写 SQL。
+
+    执行计划（仅当 Agent 生成/外部注入 candidate_plans 时出现；模板本身不含，
+    保证纯维度路径输出逐字段不变）：
+        decision.plan                   计划决策条目（strategy=plan_id，
+                                        family/risk/predicted_ms/single_ms/
+                                        saving_ms/fallback 扩展字段）
+        selected_strategy.execution_plan 选中计划的完整描述符（执行器直接消费）
+        plan_selection                  全部计划的评估明细与基线来源
     """
     return {
         "query_id": "",
@@ -256,7 +264,10 @@ HISTORICAL_RECORD_CONTRACT = {
         "device": {"device_count": 1, "multi_device": False},
         "filter": {"non_time_filter_count": 1},
         "aggregation": {"has_aggregation": False, "has_group_by": False,
-                        "has_window": False, "functions": []},
+                        "has_window": False, "window_interval_ms": None,
+                        "functions": []},
+        # 测点指纹（值过滤列 + 聚合参数的测点名，去设备前缀）；未知 → None
+        "measurements": ["s_1"],
     },
     "database_state": {"data_scale_level": "small", "device_scale": 100},   # 可选
     "system_state": {"load_level": "low"},                                    # 可选

@@ -5,13 +5,19 @@ Knowledge Memory Agent 与 Optimization Decision Agent 使用同一套相似度�
 """
 
 from mataof.similarity import (  # noqa: F401
+    BASELINE_SAMPLE_SHARE,
     DECAY_HALF_LIFE_HOURS,
     HistoryEvidence,
+    MIN_BASELINE_SAMPLES,
     SIMILARITY_THRESHOLD,
     SIM_WEIGHT_DB,
     SIM_WEIGHT_QUERY,
     SIM_WEIGHT_SYSTEM,
+    baseline_sample_adequate,
     build_history_evidence,
     component_similarities,
     record_similarity,
+    same_database_context,
+    same_query_shape,
+    same_shape_evidence,
 )

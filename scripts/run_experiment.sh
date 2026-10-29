@@ -17,6 +17,7 @@ PER_FILE_LIMIT=""     # 每个文件取样条数；空 = 全量
 SAMPLE="seq"          # seq | random
 SEED=42
 WORKERS=1             # 查询级并行（B2；LLM 模式建议 4）
+RESULT_MODE="row"     # native 专用：row=逐行（历史口径）/ df=DataFrame 批量（同 agent）
 
 usage() {
   cat <<EOF
@@ -31,6 +32,9 @@ usage() {
   --sample seq|random   取样方式（默认 seq）
   --seed N              随机取样种子（默认 42，可复现）
   --workers N           查询级并行（默认 1；agent/llm/fixed 模式生效）
+  --result-mode MODE    native 专用结果消费口径：row（逐行，默认；历史 baseline）
+                        或 df（DataFrame 批量，与 agent 计划同口径；输出到
+                        results_baseline_df/）
 EOF
 }
 
@@ -44,6 +48,7 @@ while [[ $# -gt 0 ]]; do
     --sample) SAMPLE="$2"; shift 2 ;;
     --seed) SEED="$2"; shift 2 ;;
     --workers) WORKERS="$2"; shift 2 ;;
+    --result-mode) RESULT_MODE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数: $1" >&2; usage; exit 2 ;;
   esac
@@ -53,6 +58,14 @@ case "$MODE" in
   native|agent|llm|fixed) ;;
   *) echo "缺少 --mode（native/agent/llm/fixed）" >&2; usage; exit 2 ;;
 esac
+
+case "$RESULT_MODE" in
+  row|df) ;;
+  *) echo "未知 --result-mode: $RESULT_MODE（仅 row/df）" >&2; exit 2 ;;
+esac
+if [[ "$MODE" != "native" && "$RESULT_MODE" != "row" ]]; then
+  echo "注意: --result-mode 仅 native 模式生效；agent/llm/fixed 固定走计划 df 路径" >&2
+fi
 
 # llm 模式预检：vLLM 不可用则直接失败（防止静默退化为 agent 模式污染实验）
 if [[ "$MODE" == "llm" ]]; then
@@ -96,8 +109,13 @@ total_files=${#file_list[@]}
 if [[ "$MODE" == "native" ]]; then
   # native：逐文件客户端直发原始 SQL（与 agent 模式同一客户端/同一计时代码，
   # 采样与 agent 共用 sample_items——同种子同抽样，口径一致）
-  # 每轮开始前清理旧 .jsonl：防其他规模/历史轮的残留文件被汇总重复计数
-  rm -f "$ROOT"/results_baseline/*.jsonl
+  # 双口径：row（历史 baseline，逐行）与 df（同 agent 计划消费方式）分目录存放，
+  # 互不覆盖；每轮只清理当前口径目录，防残留文件被汇总重复计数。
+  BASELINE_DIR="$ROOT/results_baseline"
+  [[ "$RESULT_MODE" == "df" ]] && BASELINE_DIR="$ROOT/results_baseline_df"
+  mkdir -p "$BASELINE_DIR"
+  rm -f "$BASELINE_DIR"/*.jsonl
+  echo "== native 结果消费口径: $RESULT_MODE（输出 $BASELINE_DIR）=="
   file_no=0
   for f in "${file_list[@]}"; do
     name=$(basename "$f" .sql)
@@ -105,8 +123,9 @@ if [[ "$MODE" == "native" ]]; then
     [[ -n "$scale" ]] || scale=${SCALES%%,*}
     file_no=$((file_no + 1))
     echo "== 文件 [$file_no/$total_files] $scale/$name =="
-    out="$ROOT/results_baseline/${scale}_${name}.jsonl"
+    out="$BASELINE_DIR/${scale}_${name}.jsonl"
     python3 "$ROOT/scripts/run_native_client.py" --file "$f" --out "$out" \
+      --result-mode "$RESULT_MODE" \
       ${PER_FILE_LIMIT:+--per-file-limit "$PER_FILE_LIMIT"} \
       --sample "$SAMPLE" --seed "$SEED"
   done
@@ -140,8 +159,10 @@ echo "本轮墙钟总用时: $(( $(date +%s) - start ))s"
 # 汇总报告
 case "$MODE" in
   native)
-    echo "== 原生 baseline 汇总（客户端墙钟，与 agent 同口径）=="
-    python3 "$ROOT/scripts/aggregate_native.py" "$ROOT"/results_baseline/*.jsonl
+    BASELINE_DIR="$ROOT/results_baseline"
+    [[ "$RESULT_MODE" == "df" ]] && BASELINE_DIR="$ROOT/results_baseline_df"
+    echo "== 原生 baseline 汇总（$RESULT_MODE 口径，客户端墙钟）=="
+    python3 "$ROOT/scripts/aggregate_native.py" "$BASELINE_DIR"/*.jsonl
     ;;
   agent)
     echo "== Agent 模式汇总（轮次 $ROUND_ID）=="

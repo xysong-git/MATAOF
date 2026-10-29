@@ -53,6 +53,9 @@ class SQLiteStore(MemoryStore):
         # 签名聚合（派生数据；sig_id → 聚合状态）
         self._sigs: dict[str, dict] = {}
         self._exec_total = 0                                  # 执行总数
+        # 已存在签名被追加执行 → 聚合统计变化，但签名数不变；
+        # 检索侧的向量矩阵按签名数缓存，必须据此刷新受影响的行。
+        self._dirty_sigs: set[str] = set()
         super().__init__(path=None, save_interval=save_interval)
         self.path = path
         if path and os.path.exists(path):
@@ -95,6 +98,7 @@ class SQLiteStore(MemoryStore):
                 self._migrate_v1(conn)
             rows = conn.execute("SELECT key, value FROM meta").fetchall()
             meta = {k: json.loads(v) for k, v in rows}
+            version = int(meta.get("version") or 0)
             self._next_seq = int(meta.get("next_seq", 0) or 1)
             self._evaluations = meta.get("evaluations") or {}
             self._strategy_stats = meta.get("strategy_stats") or {}
@@ -115,8 +119,24 @@ class SQLiteStore(MemoryStore):
                 self._exec_total = int(meta.get("exec_total")
                                        or conn.execute(
                                            "SELECT COUNT(*) FROM executions").fetchone()[0])
-            if self._exec_total and (not self._evaluations or not self._strategy_stats):
-                self._backfill_from_sigs()
+            # v3→v4：评价口径改为"已评估执行"分母（insufficient 不计入）；
+            # v4→v5：unchanged 是中性结果，成功率分母改为方向明确的执行
+            # （improved + degraded + failed）。旧快照无法区分，必须从
+            # executions 逐条事实重建一次。
+            needs_rebuild = bool(self._exec_total) and (
+                version < 5
+                or not self._evaluations or not self._strategy_stats
+                or any(not isinstance(e, dict)
+                       or any(k not in e for k in
+                              ("evaluated", "failure", "unchanged"))
+                       for e in self._evaluations.values())
+                or any(not isinstance(s, dict)
+                       or any(k not in s for k in
+                              ("evaluated", "failure", "unchanged"))
+                       for s in self._strategy_stats.values())
+            )
+            if needs_rebuild:
+                self._rebuild_derived(conn)
         except (sqlite3.DatabaseError, json.JSONDecodeError, OSError,
                 TypeError, ValueError):
             # 损坏的存储文件 → 从空库开始（不覆盖原文件，直到下一次保存）
@@ -157,26 +177,46 @@ class SQLiteStore(MemoryStore):
             query_type = qf.get("query_type") or "unknown"
             by_dim = (rec.get("strategy") or {}).get("by_dimension") or {}
             n = agg["count"]
+            # 已评估执行 = 有明确效果判断的执行；insufficient/cancelled 不计入。
+            evaluated = (agg["improved"] + agg["degraded"]
+                         + agg["failed_timeout"] + agg.get("unchanged", 0))
+            failure = agg["degraded"] + agg["failed_timeout"]
+            unchanged = agg.get("unchanged", 0)
             lat = rec["execution"]["metrics"].get("response_time_ms")
             for dim, strategy_name in by_dim.items():
                 if not strategy_name or strategy_name == "not_applicable":
                     continue
                 key = self._evaluation_key(query_type, dim, strategy_name)
                 e = self._evaluations.setdefault(
-                    key, {"count": 0, "success": 0, "latencies": []})
+                    key, {"count": 0, "evaluated": 0, "success": 0,
+                          "failure": 0, "unchanged": 0, "latencies": []})
                 e["count"] += n
+                e["evaluated"] += evaluated
                 e["success"] += agg["improved"]
+                e["failure"] += failure
+                e["unchanged"] += unchanged
                 if lat is not None:
                     e["latencies"].append(lat)   # 签名均值（加权口径）
             sid_key = (rec.get("strategy") or {}).get("strategy_id") or "unknown"
             s = self._strategy_stats.setdefault(
-                sid_key, {"total": 0, "success": 0, "failure": 0, "latencies": []})
+                sid_key, {"total": 0, "evaluated": 0, "success": 0,
+                          "failure": 0, "unchanged": 0, "latencies": []})
             s["total"] += n
+            s["evaluated"] += evaluated
             s["success"] += agg["improved"]
-            s["failure"] += rec["failure_count"]
+            s["failure"] += failure
+            s["unchanged"] += unchanged
             if lat is not None:
                 s["latencies"].append(lat)
         self._save()
+
+    def _rebuild_derived(self, conn: sqlite3.Connection) -> None:
+        """从 executions 逐条事实重建签名聚合与派生表（旧版本迁移/防御路径）。"""
+        self._sigs = {}
+        self._evaluations = {}
+        self._strategy_stats = {}
+        self._rebuild_sigs(conn)
+        self._backfill_from_sigs()
 
     def _rebuild_sigs(self, conn: sqlite3.Connection) -> None:
         """从 executions + signatures 表重建内存聚合（meta 快照缺失时）。"""
@@ -186,8 +226,9 @@ class SQLiteStore(MemoryStore):
             self._sigs[sig_id] = {
                 "payload": json.loads(payload), "first_ts": first_ts,
                 "last_ts": first_ts, "count": 0, "improved": 0,
-                "failed_timeout": 0, "degraded": 0, "critical": {},
-                "lat_sum": 0.0, "lat_min": None, "lat_max": None,
+                "failed_timeout": 0, "degraded": 0, "unchanged": 0,
+                "critical": {}, "lat_sum": 0.0, "lat_min": None,
+                "lat_max": None,
             }
         for sig_id, latency, effect, status, anomalies, ts in conn.execute(
                 "SELECT sig_id, latency_ms, effect, status, anomalies, ts "
@@ -197,6 +238,7 @@ class SQLiteStore(MemoryStore):
                 continue
             self._apply_execution(agg, latency, effect, status,
                                   json.loads(anomalies) if anomalies else [], ts)
+        self._dirty_sigs.clear()   # 全量重建后无增量待刷新
 
     # ---- 聚合归并（O(1)/执行）----
     def _apply_execution(self, agg: dict, latency, effect: str, status: str,
@@ -213,6 +255,8 @@ class SQLiteStore(MemoryStore):
             agg["failed_timeout"] += 1
         if effect == "degraded":
             agg["degraded"] += 1
+        if effect == "unchanged":
+            agg["unchanged"] = agg.get("unchanged", 0) + 1
         for t in critical:
             agg["critical"][t] = agg["critical"].get(t, 0) + 1
         if isinstance(latency, (int, float)) and not isinstance(latency, bool):
@@ -238,8 +282,9 @@ class SQLiteStore(MemoryStore):
             agg = self._sigs[sig_id] = {
                 "payload": payload, "first_ts": rec.get("timestamp"),
                 "last_ts": None, "count": 0, "improved": 0,
-                "failed_timeout": 0, "degraded": 0, "critical": {},
-                "lat_sum": 0.0, "lat_min": None, "lat_max": None,
+                "failed_timeout": 0, "degraded": 0, "unchanged": 0,
+                "critical": {}, "lat_sum": 0.0, "lat_min": None,
+                "lat_max": None,
             }
         metrics = (rec.get("execution") or {}).get("metrics") or {}
         latency = metrics.get("response_time_ms")
@@ -247,8 +292,11 @@ class SQLiteStore(MemoryStore):
         effect = rec.get("execution_result") or ""
         critical = [a.get("type") or "anomaly" for a in (rec.get("anomalies") or [])
                     if a.get("severity") == "critical"]
+        is_new = agg["count"] == 0
         self._apply_execution(agg, latency, effect, status, critical,
                               rec.get("timestamp"))
+        if not is_new:
+            self._dirty_sigs.add(sig_id)   # 已有签名统计变化 → 检索缓存需刷新
         self._pending.append((sig_id, record_id, {
             "latency_ms": latency,
             "effect": effect,
@@ -274,7 +322,7 @@ class SQLiteStore(MemoryStore):
                       for k, v in agg.items() if k != "payload" and k != "first_ts"}
                 for sid, agg in self._sigs.items()}
         return {
-            "version": 3,
+            "version": 5,
             "next_seq": self._next_seq,
             "exec_total": self._exec_total,
             "evaluations": _copy.deepcopy(self._evaluations),
@@ -362,6 +410,19 @@ class SQLiteStore(MemoryStore):
             return "improved" if improved > 0 else "unchanged"
         return "degraded"
 
+    def pop_dirty_signatures(self) -> set[str]:
+        """取出并清空"已有签名统计发生变化"的集合（检索缓存增量刷新用）。"""
+        with self._lock:
+            dirty = set(self._dirty_sigs)
+            self._dirty_sigs.clear()
+        return dirty
+
+    def signature_record(self, sig_id: str) -> Optional[dict]:
+        """按 sig_id 合成当前聚合记录（签名不存在 → None）。"""
+        with self._lock:
+            agg = self._sigs.get(sig_id)
+            return self._signature_record(sig_id, agg) if agg is not None else None
+
     def _signature_record(self, sig_id: str, agg: dict) -> dict:
         """合成签名记录（KM 布局 + 聚合扩展字段；检索与统计的消费形态）。"""
         payload = agg["payload"]
@@ -384,11 +445,15 @@ class SQLiteStore(MemoryStore):
                           for t in agg["critical"]],
             # ---- 聚合扩展字段（检索/证据按 count 加权使用）----
             "execution_count": n,
+            "evaluated_count": (agg["improved"] + agg["degraded"]
+                                + agg["failed_timeout"]
+                                + agg.get("unchanged", 0)),
             "improved_count": agg["improved"],
             "failure_count": agg["failed_timeout"] + agg["degraded"]
                             + sum(agg["critical"].values()),
             "failed_timeout_count": agg["failed_timeout"],
             "degraded_count": agg["degraded"],
+            "unchanged_count": agg.get("unchanged", 0),
             "critical_counts": dict(agg["critical"]),
             "success_ratio": round(agg["improved"] / n, 4) if n else 0.0,
             "latency_avg_ms": lat_avg,

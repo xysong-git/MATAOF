@@ -22,8 +22,18 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import time
+from typing import Any, Callable, Optional
 
+from mataof.runtime import (
+    Abort,
+    Act,
+    AgentContext,
+    AgentRuntime,
+    Finish,
+    Goal,
+    ToolRegistry,
+)
 from mataof.schemas import optimization_decision_output_template
 from mataof.agents.optimization_decision.catalog import (
     DIMENSIONS,
@@ -34,6 +44,7 @@ from mataof.agents.optimization_decision.context import DecisionContext, normali
 from mataof.agents.optimization_decision.similarity import (
     SIMILARITY_THRESHOLD,
     build_history_evidence,
+    same_shape_evidence,
 )
 from mataof.agents.optimization_decision.scoring import (
     DimensionResult,
@@ -48,6 +59,66 @@ from mataof.agents.optimization_decision.llm_enhance import (
     request_llm_decision,
     request_preferences,
 )
+from .plans.cost import BASELINE_PLAN_ID, select_plan
+from .plans.integration import (
+    dimension_overrides,
+    plan_decision_entry,
+    plan_dimensions,
+    plan_equivalent_sql,
+    plan_summary,
+)
+from .provider import build_plans, plan_generation_notes
+
+
+# ---------------------------------------------------------------------------
+# Agent 闭环配置（默认保守：最多 2 次尝试 = 初始 + 1 次重规划）
+# ---------------------------------------------------------------------------
+
+_AGENT_DEFAULTS = {
+    "max_attempts": 2,
+    "deadline_ms": 30_000.0,
+    "replan_on": ("degraded", "failed"),
+}
+
+
+def _normalize_agent_config(raw: Any) -> dict:
+    """归一化 Agent 运行配置；非法值回退默认（不影响确定性决策）。"""
+    cfg = dict(_AGENT_DEFAULTS)
+    if not isinstance(raw, dict):
+        return cfg
+    if raw.get("max_attempts") is not None:
+        try:
+            cfg["max_attempts"] = max(1, min(4, int(raw["max_attempts"])))
+        except (TypeError, ValueError):
+            pass
+    if raw.get("deadline_ms") is not None:
+        try:
+            cfg["deadline_ms"] = max(1.0, float(raw["deadline_ms"]))
+        except (TypeError, ValueError):
+            pass
+    if isinstance(raw.get("replan_on"), (list, tuple, set)):
+        values = tuple(str(x) for x in raw["replan_on"] if x is not None)
+        if values:
+            cfg["replan_on"] = values
+    return cfg
+
+
+def _plan_id(decision: Any) -> Optional[str]:
+    """从决策输出中取最终执行计划 id（无计划 → None）。"""
+    if not isinstance(decision, dict):
+        return None
+    ps = decision.get("plan_selection")
+    if isinstance(ps, dict) and ps.get("chosen_plan_id"):
+        return str(ps["chosen_plan_id"])
+    entry = (decision.get("decision") or {}).get("plan")
+    if isinstance(entry, dict) and entry.get("strategy"):
+        return str(entry["strategy"])
+    return None
+
+
+def _public_attempt(attempt: dict) -> dict:
+    """对外暴露的尝试记录（去掉下划线私有字段）。"""
+    return {k: v for k, v in attempt.items() if not k.startswith("_")}
 
 
 class OptimizationDecisionAgent:
@@ -57,11 +128,14 @@ class OptimizationDecisionAgent:
         agent = OptimizationDecisionAgent()
         result = agent.decide({
             "query_id": "q1",
+            "query": "SELECT ...",         # 可选：候选策略/计划由 Agent 生成
             "query_analysis": <Query Analysis Agent 的输出>,
             "database_state": {...},      # 可选
             "system_state": {...},        # 可选
             "historical_records": [...],  # 可选
-            "candidate_strategies": {...},# 可选（缺失 → 目录全集）
+            "device_inventory": [...],    # 可选：通配设备展开清单
+            "planning": {"enabled": True},# 可选：计划生成配置（默认开启）
+            "candidate_strategies": {...},# 可选（非空 → 覆盖内置候选生成）
             "baseline_strategy": {...},   # 可选（缺失 → 内置安全默认）
         })
     """
@@ -69,6 +143,49 @@ class OptimizationDecisionAgent:
     name = "optimization_decision"
     description = "综合查询特征、数据库状态、系统状态与历史经验，在候选策略空间中"
     description += "选择当前查询的优化策略，并给出可追踪的依据与置信度。"
+
+    def _prepare_plan_candidates(self, decision_input: dict) -> dict:
+        """生成可执行候选计划（决策 Agent 的内置能力，不是外挂计划层）。
+
+        有原始 SQL + 有效 query_analysis 时，Agent 自己把查询编译为候选计划；
+        外部显式提供 candidate_plans（含空列表）则视为覆盖，不再生成。
+        planning.enabled=false 可关闭自动生成（用于消融/对照），显式注入的计划
+        仍然有效。
+        """
+        if not isinstance(decision_input, dict):
+            return decision_input
+        prepared = dict(decision_input)
+        if prepared.get("candidate_plans") is not None:
+            return prepared
+        planning = prepared.get("planning")
+        if not isinstance(planning, dict):
+            planning = {}
+        if planning.get("enabled") is False or prepared.get("planning_enabled") is False:
+            return prepared
+        query = prepared.get("query")
+        analysis = prepared.get("query_analysis")
+        if not (isinstance(query, str) and query.strip()
+                and isinstance(analysis, dict) and analysis.get("query_features")):
+            return prepared
+        inventory = planning.get("device_inventory",
+                                 prepared.get("device_inventory"))
+        raw_parallelism = planning.get("max_parallelism",
+                                       prepared.get("plan_max_parallelism", 8))
+        try:
+            max_parallelism = max(1, int(raw_parallelism))
+        except (TypeError, ValueError):
+            max_parallelism = 8
+        try:
+            prepared["candidate_plans"] = build_plans(
+                query, analysis, inventory, max_parallelism)
+            prepared["plan_generation_notes"] = plan_generation_notes(
+                query, analysis, inventory)
+        except Exception as exc:  # 生成失败绝不拖垮决策；退回维度策略路径
+            prepared["candidate_plans"] = []
+            prepared["plan_generation_notes"] = [
+                f"计划生成失败：{type(exc).__name__}；本轮使用维度策略路径"
+            ]
+        return prepared
 
     def decide(self, decision_input: dict, llm: Optional[object] = None,
                llm_decide: bool = False) -> dict:
@@ -79,12 +196,15 @@ class OptimizationDecisionAgent:
           （实验性，不参与风险门控）；
         - llm_decide=True（decision_mode="llm_primary"）：LLM 为每个适用维度
           从候选中选择策略，**只做合法性校验**（候选 ∩ 目录、维度适用、需求
-          满足；equivalent_sql 一律取自候选提供方，LLM 不生成 SQL）；
+          满足；equivalent_sql 一律取自候选生成器，LLM 不生成 SQL）；
           LLM 失败/非法 → 该维度保持确定性决策（兜底）。evidence/置信度
           始终来自确定性链路，LLM 不给证据（防编造）。
         """
         output = optimization_decision_output_template()
 
+        # 计划候选生成是决策 Agent 的固有步骤：有 query 即编译计划，
+        # 外部 candidate_plans 仅作为覆盖/测试注入。
+        decision_input = self._prepare_plan_candidates(decision_input)
         ctx = normalize_input(decision_input)
         output["query_id"] = ctx.query_id
         if ctx.errors:
@@ -103,6 +223,11 @@ class OptimizationDecisionAgent:
             ctx.historical_records, ctx.compact_features,
             ctx.database_state, ctx.system_state, ctx.reference_time,
         )
+        # 计划成本预测优先使用"同查询形状 + 同数据规模"的实测证据：
+        # 近邻形状（q3/q10 测点不同、q7/q11 窗口不同）的绝对延迟不能
+        # 混入当前形状的成本预测；样本不足（<3 次）→ 退回全部相似证据。
+        plan_ev = same_shape_evidence(
+            ev, ctx.compact_features, ctx.database_state) or ev
 
         # ---- 各维度评估与选择（含策略评价表先验，D1）----
         evaluations = decision_input.get("strategy_evaluations")
@@ -185,12 +310,68 @@ class OptimizationDecisionAgent:
                 "equivalent_sql": ov.get("equivalent_sql"),
             }
 
+        # ---- 执行计划选择：Agent 自己生成的可执行计划中做成本/收益选择 ----
+        # 计划是权威执行动作：维度决策被显式对齐/批次取值覆盖，保证
+        # strategy_id/决策条目与真正送到执行器的计划一致。
+        plan_choice = None
+        plan_entry = None
+        plan_overrides: dict[str, dict] = {}
+        if ctx.candidate_plans:
+            planning = decision_input.get("planning")
+            if not isinstance(planning, dict):
+                planning = {}
+            plan_kwargs = {"eval_min_count": min_count}
+            v = decision_input.get("plan_min_saving_ms")
+            if v is None:
+                v = planning.get("min_saving_ms")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                plan_kwargs["min_saving_ms"] = float(v)
+            v = decision_input.get("plan_min_saving_ratio")
+            if v is None:
+                v = planning.get("min_saving_ratio")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                plan_kwargs["min_saving_ratio"] = float(v)
+            excluded_ids = decision_input.get("excluded_plan_ids")
+            if isinstance(excluded_ids, (list, tuple, set)):
+                excluded_ids = [str(x) for x in excluded_ids
+                                if isinstance(x, (str, int))]
+            else:
+                excluded_ids = None
+            plan_choice = select_plan(
+                ctx.candidate_plans, ctx, plan_ev,
+                evaluations=evaluations if isinstance(evaluations, dict) else None,
+                excluded_plan_ids=excluded_ids,
+                **plan_kwargs,
+            )
+            if plan_ev is not ev:
+                plan_choice.notes.append(
+                    "成本预测使用同查询形状且同数据规模的实测证据"
+                    f"（{plan_ev.total_count('plan')} 次；近邻形状不计入）"
+                )
+            plan_entry = plan_decision_entry(plan_choice, ctx)
+            if plan_entry is not None:
+                output["decision"]["plan"] = plan_entry
+                output["selected_strategy"]["execution_plan"] = plan_choice.chosen
+                output["plan_selection"] = plan_choice.to_dict()
+                pconf = plan_entry["confidence"]
+                plan_overrides = dimension_overrides(
+                    plan_choice.chosen, results["alignment"].applicable, pconf)
+                for dim, entry in plan_overrides.items():
+                    if dim in llm_chosen and llm_chosen[dim]["name"] != entry["strategy"]:
+                        ctx.notes.append(
+                            f"计划覆盖 LLM 维度选择：{dim}={llm_chosen[dim]['name']}"
+                            f" → {entry['strategy']}（以执行计划为准）"
+                        )
+                    output["decision"][dim] = dict(entry)
+
         # ---- selected_strategy 与 fallback_strategy ----
         parts, params = [], {}
         fallback_parts = []
         for dim in DIMENSIONS:
             r = results[dim]
-            if dim in llm_chosen:
+            if dim in plan_overrides:
+                parts.append(f"{dim}={plan_overrides[dim]['strategy']}")
+            elif dim in llm_chosen:
                 parts.append(f"{dim}={llm_chosen[dim]['name']}")
             elif not r.applicable:
                 parts.append(f"{dim}={NOT_APPLICABLE}")
@@ -200,39 +381,59 @@ class OptimizationDecisionAgent:
             else:
                 parts.append(f"{dim}={r.chosen.name}")
         params = _strategy_parameters(results, ctx, llm_chosen)
+        if plan_choice is not None and plan_choice.chosen is not None:
+            # 计划权威：移除被覆盖维度的旧参数，写入计划实际执行参数
+            for dim in plan_overrides:
+                params.pop(dim, None)
+            dims = plan_dimensions(plan_choice.chosen)
+            params["fetch_size"] = {"fetch_size": dims["fetch_size_value"]}
+            params["plan"] = plan_summary(plan_choice.chosen)
+            parts.append(f"plan={plan_choice.chosen.get('plan_id')}")
         output["selected_strategy"]["strategy_id"] = "|".join(parts)
         output["selected_strategy"]["strategy_parameters"] = params
-        output["selected_strategy"]["equivalent_sql"] = _compose_equivalent_sql(
-            ctx, results, llm_chosen)
-        output["fallback_strategy"] = "|".join(fallback_parts)
+        if plan_choice is not None and plan_choice.chosen is not None:
+            output["selected_strategy"]["equivalent_sql"] = plan_equivalent_sql(
+                plan_choice.chosen)
+            output["fallback_strategy"] = ""
+        else:
+            output["selected_strategy"]["equivalent_sql"] = _compose_equivalent_sql(
+                ctx, results, llm_chosen)
+            output["fallback_strategy"] = "|".join(fallback_parts)
 
         # ---- evidence ----
         output["evidence"] = _collect_evidence(ctx, ev, results)
 
         # ---- 整体置信度与状态 ----
-        output["overall_confidence"] = overall_confidence(
-            results, ctx, dim_conf, len(ev.used)
-        )
-        n_fallback = n_applicable = 0
-        for dim in DIMENSIONS:
-            r = results[dim]
-            if dim in llm_chosen:
-                n_applicable += 1            # LLM 选择的维度视为已决策（不属回退）
-            elif r.applicable:
-                n_applicable += 1
-                if r.is_fallback:
-                    n_fallback += 1
-        if n_fallback == 0:
+        if plan_entry is not None:
+            # 计划决定实际执行动作：置信度取计划证据强度
+            output["overall_confidence"] = plan_entry["confidence"]
             output["decision_status"] = "success"
-        elif n_fallback >= n_applicable:
-            output["decision_status"] = "fallback"
         else:
-            output["decision_status"] = "partial_fallback"
+            output["overall_confidence"] = overall_confidence(
+                results, ctx, dim_conf, len(ev.used)
+            )
+            n_fallback = n_applicable = 0
+            for dim in DIMENSIONS:
+                r = results[dim]
+                if dim in llm_chosen:
+                    n_applicable += 1        # LLM 选择的维度视为已决策（不属回退）
+                elif r.applicable:
+                    n_applicable += 1
+                    if r.is_fallback:
+                        n_fallback += 1
+            if n_fallback == 0:
+                output["decision_status"] = "success"
+            elif n_fallback >= n_applicable:
+                output["decision_status"] = "fallback"
+            else:
+                output["decision_status"] = "partial_fallback"
 
         # ---- 可追踪说明（扩展字段）----
-        notes = list(ctx.notes)
+        notes = list(ctx.notes) + list(ctx.plan_notes)
         for dim in DIMENSIONS:
             notes.extend(results[dim].exclusion_notes)
+        if plan_choice is not None:
+            notes.extend(f"计划选择：{n}" for n in plan_choice.notes)
         if ev.invalid:
             notes.append(f"{ev.invalid} 条历史记录结构不合法，未参与决策")
         if ev.below_threshold:
@@ -247,6 +448,231 @@ class OptimizationDecisionAgent:
         output["llm_analysis"] = build_llm_analysis(
             None if llm_decide else llm, decision_input, output, ctx.candidates)
         return output
+
+    # ------------------------------------------------------------------
+    # Agent 闭环：决策 → 执行 → 观察 →（退化时）重规划 → 终止
+    # ------------------------------------------------------------------
+    def run(self, decision_input: dict, *,
+            execute: Optional[Callable[[dict], dict]] = None,
+            agent_config: Optional[dict] = None,
+            llm: Optional[object] = None,
+            llm_decide: bool = False) -> dict:
+        """在真实执行反馈上闭合决策环（与 `decide` 的纯函数路径并存）。
+
+        execute：由调用方注入的执行工具，签名 `execute(decision) -> dict`，
+        必须返回：
+            {"execution": {...}, "monitoring": {...},
+             "monitoring_reference": {...}|None, "monitoring_input": {...},
+             "execution_ms": float, "monitoring_ms": float}
+        典型实现是 runner 的"执行 + 监控"组合（执行器 + 监控 Agent）。
+
+        闭环语义（有界）：
+        1. 确定性/LLM 决策选出一个可执行计划；
+        2. 通过 execute 工具执行并观察监控反馈；
+        3. 若实测 degraded/failed 且仍有尝试预算 → 排除该计划后重规划；
+        4. 预算耗尽 / 无更优替代 / baseline 失败 → 终止并返回最后一次结果。
+
+        与 `decide` 的差异仅在于"是否行动并观察"：决策规则、候选生成、
+        证据链与确定性兜底完全复用，不引入新的策略来源。
+        """
+        cfg = _normalize_agent_config(agent_config)
+        state = {
+            "input": decision_input if isinstance(decision_input, dict) else {},
+            "decision": None,
+            "pending": None,
+            "attempts": [],
+            "excluded": [],
+            "timings": {"decision_ms": 0.0, "execution_ms": 0.0,
+                        "monitoring_ms": 0.0},
+            "final_monitoring_ms": 0.0,
+            "cfg": cfg,
+            "llm": llm,
+            "llm_decide": bool(llm_decide),
+        }
+
+        tools = ToolRegistry()
+        if execute is not None:
+            tools.register(
+                "execute_decision", execute,
+                description="执行当前决策选中的计划，返回执行事实、监控反馈与参照",
+                parameters={"required": ["decision"],
+                            "properties": {"decision": {"type": "object"}}},
+                side_effect="execute", cost="high",
+            )
+
+        runtime = AgentRuntime(self.name, tools, self._agent_policy)
+        # 每次尝试最多消耗 2 步（执行 + 观察决策）；+2 用于首次决策与收尾。
+        goal = Goal(name="optimize_query",
+                    max_steps=2 * int(cfg["max_attempts"]) + 2,
+                    deadline_ms=cfg["deadline_ms"])
+        run_result = runtime.run(goal, AgentContext(data=state))
+
+        payload = run_result.result
+        if not isinstance(payload, dict):
+            payload = self._agent_payload(state)
+        meta = payload.setdefault("agent", {})
+        meta.update({
+            "steps": run_result.steps,
+            "terminated_by": run_result.terminated_by,
+            "elapsed_ms": round(run_result.elapsed_ms, 3),
+            "trace": run_result.trace,
+        })
+        return payload
+
+    def _agent_policy(self, ctx: AgentContext, tools: ToolRegistry):
+        """OD 的策略函数：根据上一步观察决定执行、重规划或终止。"""
+        state = ctx.data
+        cfg = state["cfg"]
+        obs = ctx.last_observation
+
+        # ---- 第一步：先做决策（不执行任何外部动作）----
+        if obs is None:
+            decision, ms = self._timed_decide(
+                state["input"], state["llm"], state["llm_decide"])
+            state["timings"]["decision_ms"] += ms
+            state["decision"] = decision
+            if "execute_decision" not in tools:
+                return Abort(result=self._agent_payload(state),
+                             reason="no_executor")
+            state["pending"] = decision
+            return Act("execute_decision", {"decision": decision},
+                       reason="执行当前决策选中的计划")
+
+        # ---- 观察上一轮执行结果 ----
+        decision = state.get("pending") or state.get("decision")
+        if decision is None:
+            return Abort(result=self._agent_payload(state),
+                         reason="no_decision")
+        if obs.ok:
+            value = obs.value if isinstance(obs.value, dict) else {}
+            attempt = self._attempt_from(decision, value,
+                                         len(state["attempts"]) + 1)
+            state["timings"]["execution_ms"] += \
+                float(value.get("execution_ms") or 0.0)
+            mon_ms = float(value.get("monitoring_ms") or 0.0)
+            state["timings"]["monitoring_ms"] += mon_ms
+            state["final_monitoring_ms"] = mon_ms
+        else:
+            attempt = self._failed_attempt(decision, obs.error,
+                                           len(state["attempts"]) + 1)
+            state["final_monitoring_ms"] = 0.0
+        state["attempts"].append(attempt)
+
+        return self._decide_next(state, cfg, attempt)
+
+    def _decide_next(self, state: dict, cfg: dict, attempt: dict):
+        """退化为失败/退化且仍有预算 → 排除该计划重规划；否则终止。"""
+        assessment = attempt.get("performance_assessment")
+        plan_id = attempt.get("plan_id")
+        attempts = state["attempts"]
+
+        if assessment not in cfg["replan_on"]:
+            return Finish(result=self._agent_payload(state),
+                          reason=f"accepted:{assessment or 'unknown'}")
+        if len(attempts) >= cfg["max_attempts"]:
+            return Finish(result=self._agent_payload(state),
+                          reason="max_attempts")
+        # 无计划可排除（如 planning 关闭/输入无效）：重规划没有可作用的计划 id。
+        if not plan_id:
+            return Finish(result=self._agent_payload(state),
+                          reason="no_plan")
+        # baseline 是安全动作：它失败说明问题不在策略选择，重试其他计划
+        # 只会增加不确定性，因此不再重规划。
+        if plan_id == BASELINE_PLAN_ID:
+            return Finish(result=self._agent_payload(state),
+                          reason="baseline_not_retried")
+
+        excluded = list(dict.fromkeys([*state["excluded"], plan_id]))
+        replan_input = dict(state["input"])
+        replan_input["excluded_plan_ids"] = excluded
+        # 重规划走确定性路径：LLM 已参与过首次决策，重试不再消耗额外调用。
+        decision, ms = self._timed_decide(replan_input, None, False)
+        state["timings"]["decision_ms"] += ms
+        new_plan_id = _plan_id(decision)
+        if (new_plan_id is None or new_plan_id == plan_id
+                or new_plan_id in excluded):
+            return Finish(result=self._agent_payload(state),
+                          reason="no_alternative")
+
+        attempt["replan"] = True
+        state["decision"] = decision
+        state["excluded"] = excluded
+        state["pending"] = decision
+        return Act("execute_decision", {"decision": decision},
+                   reason=(f"实测 {assessment}（{plan_id}）→ 排除后重规划为 "
+                           f"{new_plan_id}"))
+
+    def _timed_decide(self, decision_input: dict, llm: Optional[object],
+                      llm_decide: bool) -> tuple[dict, float]:
+        t0 = time.perf_counter()
+        output = self.decide(decision_input, llm=llm, llm_decide=llm_decide)
+        return output, (time.perf_counter() - t0) * 1000.0
+
+    @staticmethod
+    def _attempt_from(decision: dict, value: dict, index: int) -> dict:
+        execution = value.get("execution") or {}
+        monitoring = value.get("monitoring") or {}
+        metrics = execution.get("metrics") or {}
+        return {
+            "attempt": index,
+            "plan_id": _plan_id(decision),
+            "strategy_id": (decision.get("selected_strategy") or {}).get("strategy_id"),
+            "decision_status": decision.get("decision_status"),
+            "confidence": decision.get("overall_confidence"),
+            "execution_status": execution.get("execution_status"),
+            "response_time_ms": metrics.get("response_time_ms"),
+            "performance_assessment": monitoring.get("performance_assessment"),
+            "replan": False,
+            "_execution": execution,
+            "_monitoring": monitoring,
+            "_reference": value.get("monitoring_reference"),
+            "_monitoring_input": value.get("monitoring_input"),
+        }
+
+    @staticmethod
+    def _failed_attempt(decision: dict, error: Optional[str], index: int) -> dict:
+        return {
+            "attempt": index,
+            "plan_id": _plan_id(decision),
+            "strategy_id": (decision.get("selected_strategy") or {}).get("strategy_id"),
+            "decision_status": decision.get("decision_status"),
+            "confidence": decision.get("overall_confidence"),
+            "execution_status": "failed",
+            "response_time_ms": None,
+            "performance_assessment": "failed",
+            "error": error,
+            "replan": False,
+            "_execution": None,
+            "_monitoring": None,
+            "_reference": None,
+            "_monitoring_input": None,
+        }
+
+    @staticmethod
+    def _agent_payload(state: dict) -> dict:
+        attempts = state.get("attempts") or []
+        final = attempts[-1] if attempts else {}
+        cfg = state.get("cfg") or _AGENT_DEFAULTS
+        return {
+            "decision": state.get("decision")
+            or optimization_decision_output_template(),
+            "execution": final.get("_execution"),
+            "monitoring": final.get("_monitoring"),
+            "monitoring_reference": final.get("_reference"),
+            "monitoring_input": final.get("_monitoring_input"),
+            "agent": {
+                "enabled": True,
+                "runtime": "mataof.runtime",
+                "policy": "deterministic_replan",
+                "max_attempts": int(cfg.get("max_attempts") or 2),
+                "replan_on": list(cfg.get("replan_on") or ()),
+                "attempts": [_public_attempt(a) for a in attempts],
+                "timings": {k: round(float(v), 3)
+                            for k, v in (state.get("timings") or {}).items()},
+                "final_monitoring_ms": round(
+                    float(state.get("final_monitoring_ms") or 0.0), 3),
+            },
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +714,7 @@ def _strategy_parameters(results: dict, ctx: DecisionContext,
     """
     llm_chosen = llm_chosen or {}
     params: dict = {}
-    # 候选携带的执行级参数（候选提供方给出，原样透传——如 fetch_size）
+    # 候选携带的执行级参数（候选生成器给出，原样透传——如 fetch_size）
     for dim in DIMENSIONS:
         r = results[dim]
         ov = llm_chosen.get(dim)
@@ -313,7 +739,7 @@ def _compose_equivalent_sql(ctx: DecisionContext, results: dict,
     - 恰好 1 个维度提供 → 该 SQL（候选按维度独立生成，典型为 Filter Order 重排）；
     - ≥2 个维度提供 → null（无法可靠组合独立生成的 SQL），执行层按 strategy_id
       与各维度参数执行，绝不输出可能错误的 SQL。
-    llm_chosen：LLM 选择的维度（SQL 同样取自候选提供方字段）。
+    llm_chosen：LLM 选择的维度（SQL 同样取自候选生成器字段）。
     """
     llm_chosen = llm_chosen or {}
     sqls = []
@@ -384,7 +810,7 @@ def _collect_evidence(ctx: DecisionContext, ev, results: dict) -> dict:
     used_dims = {u["record_id"]: [] for u in ev.used}
     for u in ev.used:
         rec = u["record"]
-        for dim in ("time_pruning", "filter_order", "aggregation_placement"):
+        for dim in ("alignment", "fetch_size", "plan"):
             if rec["strategy"].get(dim) is not None:
                 used_dims[u["record_id"]].append(dim)
     for u in ev.used:
@@ -423,3 +849,13 @@ def decide(decision_input: dict, llm: Optional[object] = None,
     （合法性校验 + 确定性兜底，见 OptimizationDecisionAgent.decide）。
     """
     return default_agent.decide(decision_input, llm=llm, llm_decide=llm_decide)
+
+
+def run_agent(decision_input: dict, *, execute: Callable[[dict], dict],
+              agent_config: Optional[dict] = None,
+              llm: Optional[object] = None,
+              llm_decide: bool = False) -> dict:
+    """Optimization Decision Agent 的闭环入口（带执行/观察/重规划）。"""
+    return default_agent.run(decision_input, execute=execute,
+                             agent_config=agent_config,
+                             llm=llm, llm_decide=llm_decide)

@@ -73,7 +73,7 @@ class JSONLStore(MemoryStore):
                     for rec in self._records.values():
                         f.write(json.dumps(rec, ensure_ascii=False,
                                            separators=(",", ":")) + "\n")
-            if self._records and (not self._evaluations or not self._strategy_stats):
+            if self._needs_derived_rebuild():
                 self._backfill_derived()
         except (json.JSONDecodeError, OSError, TypeError, ValueError):
             # 损坏的存储文件 → 从空库开始（不覆盖原文件，直到下一次保存）

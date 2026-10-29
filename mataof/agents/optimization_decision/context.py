@@ -2,11 +2,24 @@
 
 输入契约（decision_input）：
     query_id            查询标识
+    query               原始 SQL 文本（可选；提供后决策 Agent 自行生成候选策略与
+                        可执行计划，无需上游预先编译）
     query_analysis      Query Analysis Agent 的完整输出（必填；决策不得仅依据 SQL 文本）
     database_state      数据库状态（数据规模/分布/分区信息/统计信息等；缺失 → unknown）
     system_state        系统状态（CPU/内存/IO 利用率等；缺失 → unknown）
     historical_records  Knowledge Memory Agent 的历史记录列表（缺失 → 无历史证据）
-    candidate_strategies 候选策略集合（按维度 dict 或扁平名称列表；缺失 → 使用目录全集）
+    candidate_strategies 候选策略集合（按维度 dict 或扁平名称列表；非空时覆盖内置
+                        候选生成，缺失 → 决策 Agent 按查询生成；无 query → 目录全集）
+    candidate_plans     可选：外部注入的可执行计划描述符列表（覆盖内置生成）；
+                        非空时决策 Agent 在候选计划中做成本/收益选择，并把选中
+                        计划交给执行器。
+    excluded_plan_ids   可选：本次决策排除的计划 id 列表（Agent 闭环重规划用；
+                        baseline 永不被排除）。
+    device_inventory    通配设备展开清单（list[str] 或 dict[pattern, list[str]]）；
+                        用于设备/混合分区计划生成
+    planning            计划生成配置：enabled（默认 true）、max_parallelism、
+                        min_saving_ms、min_saving_ratio
+    plan_generation_notes 可选：计划生成事实说明（外部注入计划时使用）
     baseline_strategy   安全 baseline（按维度 dict 或单一策略名；缺失 → 内置默认）
     reference_time      可选：历史时效衰减的参考时间（epoch 毫秒）
 
@@ -25,12 +38,15 @@ from mataof.agents.optimization_decision.catalog import (
     catalog_strategy,
     dimension_of_strategy,
 )
+from .plans.descriptor import validate_plan_dict
+from .provider import build_candidates
 from mataof.similarity import compact_features as _compact_features
 
 
 @dataclass
 class DecisionContext:
     query_id: str
+    query: Optional[str] = None              # 原始 SQL（候选/计划生成用）
     analysis: Optional[dict] = None          # 分析 Agent 原始输出
     query_type: Optional[str] = None
     features: dict = field(default_factory=dict)   # analysis["query_features"]
@@ -40,6 +56,8 @@ class DecisionContext:
     system_state: dict = field(default_factory=dict)
     historical_records: list = field(default_factory=list)
     candidates: dict = field(default_factory=dict)   # 维度 → 合法候选名列表
+    candidate_plans: list = field(default_factory=list)  # 可执行计划（已校验）
+    plan_notes: list = field(default_factory=list)   # 候选生成器的事实说明
     baseline: dict = field(default_factory=dict)     # 维度 → baseline 策略名
     reference_time: Optional[int] = None
     errors: list = field(default_factory=list)       # 输入问题（invalid_input 依据）
@@ -93,9 +111,9 @@ def _normalize_candidates(raw: Any, notes: list) -> dict[str, list[dict]]:
     候选条目支持两种形式（混合模型）：
     - 纯名称："time_first"（向后兼容；等价 SQL 缺省 → None）
     - 富条目：{"strategy": "time_first",
-                "equivalent_sql": "SELECT ...（候选提供方生成的原查询等价形式）",
+                "equivalent_sql": "SELECT ...（候选生成器提供的原查询等价形式）",
                 "parameters": {...执行级参数...}}
-    equivalent_sql 由候选提供方（外部系统）生成，决策 Agent 只选择、不生成/改写 SQL。
+    equivalent_sql 由 Agent 内置候选生成器（或外部配置）提供，决策只选择、不生成/改写 SQL。
     """
     def _entry(item: Any, dim: str) -> Optional[dict]:
         if isinstance(item, str):
@@ -171,6 +189,38 @@ def _normalize_candidates(raw: Any, notes: list) -> dict[str, list[dict]]:
                 for n in STRATEGY_CATALOG[d].keys()] for d in DIMENSIONS}
 
 
+def _normalize_plans(raw: Any, notes: list) -> list[dict]:
+    """候选计划归一化：逐条结构校验（不可执行的计划直接丢弃并记录原因）。
+
+    raw 为 None → 空列表（调用方未提供外部计划；decide() 会在有 query 时
+    使用内置生成器补齐）。非法条目不会导致整体失败；只要仍有合法计划，
+    计划选择就工作。
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        notes.append("candidate_plans 不是列表，忽略计划候选")
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            notes.append(f"候选计划 #{i} 不是对象，已忽略")
+            continue
+        plan, err = validate_plan_dict(item)
+        if plan is None:
+            notes.append(f"候选计划 #{i}（{item.get('plan_id') or '无 plan_id'}）"
+                         f"不可执行，已忽略：{err}")
+            continue
+        pid = plan["plan_id"]
+        if pid in seen:
+            notes.append(f"候选计划 {pid} 重复，只保留首个")
+            continue
+        seen.add(pid)
+        out.append(plan)
+    return out
+
+
 def _normalize_baseline(raw: Any, notes: list) -> dict[str, str]:
     out = dict(BASELINE_STRATEGIES)
     if raw is None:
@@ -204,6 +254,10 @@ def normalize_input(decision_input: dict) -> DecisionContext:
         ctx.errors.append("decision_input 不是 JSON 对象")
         return ctx
 
+    raw_query = decision_input.get("query")
+    if isinstance(raw_query, str) and raw_query.strip():
+        ctx.query = raw_query.strip()
+
     analysis = decision_input.get("query_analysis")
     if not isinstance(analysis, dict) or not (analysis.get("query_features")):
         ctx.errors.append("缺少 query_analysis（Query Analysis Agent 输出）；决策不得仅依据 SQL 文本")
@@ -230,7 +284,18 @@ def normalize_input(decision_input: dict) -> DecisionContext:
     if hist is not None and not isinstance(hist, list):
         ctx.notes.append("historical_records 不是列表，视为无历史记录")
 
-    ctx.candidates = _normalize_candidates(decision_input.get("candidate_strategies"), ctx.notes)
+    raw_candidates = decision_input.get("candidate_strategies")
+    if not raw_candidates and ctx.query:
+        # 内置候选生成：有原始 SQL 时按查询生成富条目
+        # （ALIGN BY DEVICE 等价 SQL / fetch_size 执行参数）；外部非空候选优先。
+        raw_candidates = build_candidates(ctx.query, analysis)
+    ctx.candidates = _normalize_candidates(raw_candidates, ctx.notes)
+    ctx.candidate_plans = _normalize_plans(decision_input.get("candidate_plans"), ctx.notes)
+    pn = decision_input.get("plan_generation_notes")
+    if isinstance(pn, list):
+        ctx.plan_notes = [str(x) for x in pn if isinstance(x, str) and x.strip()]
+    elif pn is not None:
+        ctx.notes.append("plan_generation_notes 不是字符串列表，忽略")
     ctx.baseline = _normalize_baseline(decision_input.get("baseline_strategy"), ctx.notes)
 
     rt = decision_input.get("reference_time")

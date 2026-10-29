@@ -40,5 +40,6 @@
     "async_enhance": false,
     "async_workers": 2,
     "cache_file": "data/llm_cache_dbs.json"
-  }
+  },
+  "device_inventory_file": "data/device_inventory.json"
 }
