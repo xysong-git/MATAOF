@@ -18,6 +18,24 @@ from mataof.runtime.message import AgentMessage, new_correlation_id, reply_to
 Handler = Callable[[AgentMessage], Optional[dict]]
 
 
+def _brief(value, depth: int = 0):
+    """trace 用摘要：消息 payload 可能携带完整分析/监控结果，避免 trace 膨胀。
+
+    深度上限 6 覆盖"信封 → payload → 业务对象 → 指标"的常见嵌套，
+    更深的节点以 "..." 代替。
+    """
+    if depth > 6:
+        return "..."
+    if isinstance(value, dict):
+        items = list(value.items())[:20]
+        return {str(k): _brief(v, depth + 1) for k, v in items}
+    if isinstance(value, (list, tuple)):
+        return [_brief(v, depth + 1) for v in list(value)[:10]]
+    if isinstance(value, str) and len(value) > 400:
+        return value[:400] + "..."
+    return value
+
+
 class AgentBus:
     """同步消息总线：register(recipient, handler) / send(message)。"""
 
@@ -57,7 +75,7 @@ class AgentBus:
         handler = self._handlers.get(message.recipient)
         if handler is None:
             self._trace.append({
-                "sent": message.to_dict(),
+                "sent": _brief(message.to_dict()),
                 "error": f"接收方未注册：{message.recipient}",
             })
             raise KeyError(f"接收方未注册：{message.recipient}")
@@ -76,7 +94,8 @@ class AgentBus:
             response.meta["error"] = f"{type(exc).__name__}: {exc}"
             error = response.meta["error"]
 
-        entry = {"request": message.to_dict(), "response": response.to_dict()}
+        entry = {"request": _brief(message.to_dict()),
+                 "response": _brief(response.to_dict())}
         if error:
             entry["error"] = error
         self._trace.append(entry)

@@ -228,14 +228,22 @@ equivalent_sql）、`evidence`（实际用于决策的条目）、`overall_confi
 
 `decide()` 是纯函数；`run(decision_input, execute=...)` 在它外面加一个有界控制环：
 
-1. 决策 → 通过 `execute_decision` 工具执行 → 观察监控反馈；
-2. `improved`/`unchanged` → 接受并终止；
-3. `degraded`/`failed` 且仍有尝试预算 → 把该 `plan_id` 放入
+1. 初始 `historical_records` 为空且注入 `recall` 工具时，先通过 AgentBus 向
+   Knowledge Memory Agent 请求一次更宽 top-K 检索；结果按 `record_id` 去重合并，
+   失败或仍为空则照常决策（不伪造证据）；
+2. 决策 → 通过 `execute_decision` 工具执行 → 观察监控反馈；
+3. `improved`/`unchanged` → 接受并终止；
+4. `degraded`/`failed` 且仍有尝试预算 → 把该 `plan_id` 放入
    `excluded_plan_ids`，走确定性路径重规划 → 再次执行；
-4. 预算耗尽 / 无替代计划 / baseline 失败 → 终止。
+5. 预算耗尽 / 无替代计划 / baseline 失败 → 终止。
 
 约束：不新增策略来源；baseline 不被排除也不重试；LLM 不参与重规划（避免放大调用
-成本）；所有尝试、终止原因与逐步 trace 写入输出的 `agent` 节。配置与消融见
+成本）；所有尝试、终止原因与逐步 trace 写入输出的 `agent` 节，补充证据结果写入
+`agent.evidence_recall`（`attempted`/`ok`/`records_added`/`retrieval`/`agent`/
+`error`；`agent` 为补充检索那次 KM 运行的摘要）。
+配置键为 `agents.optimization_decision`（旧 `agent` 键仍兼容），补充检索由
+`recall_on_empty_evidence`（默认 true）与 `recall_max_records`（默认 null =
+`max(200, 首轮×2)`）控制；完整字段、trace 结构与消融见
 [docs/agent-runtime.md](agent-runtime.md)。
 
 ## 9. 与上下游的接口约定
@@ -243,6 +251,8 @@ equivalent_sql）、`evidence`（实际用于决策的条目）、`overall_confi
 - 上游（Query Analysis Agent）：消费其完整输出；`analysis_confidence` 参与整体置信度；
 - 上游（Knowledge Memory Agent）：消费 `historical_records`（契约见
   `schemas.HISTORICAL_RECORD_CONTRACT`），历史只是证据，相似度不足时不引用；
+  闭环模式下证据为空时经 AgentBus 向其发送 `recall` 请求（更宽 top-K），
+  只合并返回的决策可用记录；
 - 下游（执行层）：`selected_strategy.strategy_id` 与 `strategy_parameters` 为可传递的
   结构化策略；计划生成成功时 `selected_strategy.execution_plan` 是执行层优先消费的
   可执行动作（子查询 + 合并规格），执行失败时执行器回退原查询并记录

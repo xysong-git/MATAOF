@@ -66,7 +66,8 @@ def parse(files: list, run_id: str = None) -> dict:
     baseline_latencies: list = []
     stage_samples: dict = {k: [] for k in (
         "analysis_ms", "retrieval_ms", "decision_ms", "monitoring_ms",
-        "knowledge_update_ms", "pipeline_overhead_ms", "end_to_end_ms")}
+        "post_llm_ms", "knowledge_update_ms", "pipeline_overhead_ms",
+        "end_to_end_ms")}
     cpu, cpu_peak, mem, mem_peak = [], [], [], []
     assessments: dict = {}
 
@@ -115,6 +116,7 @@ def parse(files: list, run_id: str = None) -> dict:
             "retrieval_ms": cost_stats(stage_samples["retrieval_ms"]),
             "decision_ms": cost_stats(stage_samples["decision_ms"]),
             "monitoring_ms": cost_stats(stage_samples["monitoring_ms"]),
+            "post_llm_ms": cost_stats(stage_samples["post_llm_ms"]),
             "knowledge_update_ms": cost_stats(stage_samples["knowledge_update_ms"]),
             "pipeline_total_ms": cost_stats(stage_samples["pipeline_overhead_ms"]),
             "llm_backfill_ms": {"samples": 0, "avg_ms": None},

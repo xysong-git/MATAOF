@@ -35,20 +35,36 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
+def _add_number(facts: set, value) -> None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        facts.add(value)
+
+
 def _fact_numbers(monitoring_output: dict) -> set:
-    """收集给定监控数据中的所有数值（含 baseline 对比百分比与置信度）。"""
+    """收集给定监控数据中的所有数值。
+
+    包含 metrics、baseline_comparison、performance_change、confidence，
+    以及 anomalies 的 observed/reference 和确定性 description 中的数字——
+    这些都在 prompt 里给到 LLM，复述它们不属于编造；此前漏掉 anomalies
+    会把合法的异常解读全部误判为编造（74/74 被拒）。
+    """
     facts: set = set()
-    metrics = monitoring_output.get("metrics") or {}
-    for v in metrics.values():
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            facts.add(v)
-    cmp = monitoring_output.get("baseline_comparison") or {}
-    for v in cmp.values():
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            facts.add(v)
+    for v in (monitoring_output.get("metrics") or {}).values():
+        _add_number(facts, v)
+    for v in (monitoring_output.get("baseline_comparison") or {}).values():
+        _add_number(facts, v)
+    change = monitoring_output.get("performance_change")
+    for v in (change if isinstance(change, (list, tuple)) else [change]):
+        _add_number(facts, v)
     conf = (monitoring_output.get("feedback") or {}).get("confidence")
-    if isinstance(conf, (int, float)) and not isinstance(conf, bool):
-        facts.add(conf)
+    _add_number(facts, conf)
+    for anomaly in monitoring_output.get("anomalies") or []:
+        if not isinstance(anomaly, dict):
+            continue
+        for key in ("observed", "reference", "value", "threshold",
+                    "deviation", "ratio"):
+            _add_number(facts, anomaly.get(key))
+        facts.update(_numbers_in(str(anomaly.get("description") or "")))
     return facts
 
 
@@ -118,9 +134,13 @@ def parse_llm_json(text: str, notes: list) -> Optional[dict]:
 
 
 def build_post_execution_llm(llm: LLMClient, monitoring_input: dict,
-                             monitoring_output: dict) -> dict:
-    """B1 合并调用：一次 LLM 调用同时产出监控解读与 KM 经验总结。
+                             monitoring_output: dict,
+                             include_experience_note: bool = True) -> dict:
+    """执行后 LLM 调用：产出一致性校验后的监控解读。
 
+    include_experience_note=True（llm_shared=false 旧路径）：同一次调用
+    额外产出 KM 经验总结；False（B/方案一）：只做监控解读，经验总结由
+    KM 按查询形状单独生成（避免逐执行生成、跨执行复用）。
     输入：监控输入（含 query/strategy 等）与确定性监控输出（事实）。
     输出：{"performance_summary", "anomaly_summary", "experience_note", "notes"}
     数字级校验对 performance/anomaly 字段生效（与独立调用口径一致）；
@@ -132,14 +152,17 @@ def build_post_execution_llm(llm: LLMClient, monitoring_input: dict,
         "experience_note": None,
         "notes": [],
     }
+    extra = ""
+    if include_experience_note:
+        extra = ("\n\n追加要求：再输出一个 experience_note 字段（<80字，中文，"
+                 "总结本次执行经验：什么策略在什么条件下表现如何；只陈述事实，"
+                 "单次观察不代表规律，不提建议；若执行未成功，写失败现象即可）。"
+                 "输出仍是一个 JSON 对象。")
     try:
         text = llm.chat([
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_prompt(monitoring_output) + "\n\n"
-             "追加要求：再输出一个 experience_note 字段（<80字，中文，总结本次执行经验："
-             "什么策略在什么条件下表现如何；只陈述事实，单次观察不代表规律，不提建议；"
-             "若执行未成功，写失败现象即可）。输出仍是一个 JSON 对象。"
-             f"\n输入的 strategy_id 为：{monitoring_input.get('strategy_id') or ''}"},
+            {"role": "user", "content": build_prompt(monitoring_output) + extra
+             + f"\n输入的 strategy_id 为：{monitoring_input.get('strategy_id') or ''}"},
         ])
     except Exception as exc:
         section["notes"].append(f"合并 LLM 调用异常（{type(exc).__name__}），回退确定性路径")

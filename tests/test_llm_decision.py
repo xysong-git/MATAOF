@@ -147,6 +147,18 @@ def test_llm_decide_valid_selection_applied():
     assert llm.calls == 1                            # 决策模式恰好 1 次调用
 
 
+def test_llm_decide_trace_marks_participation():
+    """llm_primary 下 trace 必须显式说明 LLM 参与了决策，不能只写“未启用”。"""
+    llm = FakeLLM(responses=[_decide_json(
+        {"alignment": None, "fetch_size": "fetch_default"})])
+    r = _decide(NARROW_Q, llm=llm, llm_decide=True)
+    la = r["llm_analysis"]
+    assert la["decision_mode"] == "llm_primary"
+    assert la["llm_used_for_decision"] is True
+    assert la["llm_selected_dimensions"] == ["fetch_size"]
+    assert any("LLM 已参与决策" in n for n in la["notes"])
+
+
 def test_llm_decide_unknown_name_rejected():
     llm = FakeLLM(responses=[_decide_json(
         {"alignment": None, "fetch_size": "magic_strategy"})])

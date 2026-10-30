@@ -72,7 +72,14 @@ class SQLiteStore(MemoryStore):
             self._conn.execute(
                 "CREATE TABLE IF NOT EXISTS executions "
                 "(exec_id TEXT PRIMARY KEY, sig_id TEXT NOT NULL, latency_ms REAL, "
-                "effect TEXT, status TEXT, anomalies TEXT, ts INTEGER)")
+                "effect TEXT, status TEXT, anomalies TEXT, ts INTEGER, llm_note TEXT)")
+            # v5 → v6：逐执行保存 LLM 经验总结（llm_note）。签名聚合库不保存
+            # 逐条静态记录，但经验总结随执行事实审计，仍需可按 record_id 取回。
+            cols = {row[1] for row in
+                    self._conn.execute("PRAGMA table_info(executions)")}
+            if "llm_note" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE executions ADD COLUMN llm_note TEXT")
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_exec_sig ON executions(sig_id)")
             self._conn.execute(
@@ -297,6 +304,7 @@ class SQLiteStore(MemoryStore):
                               rec.get("timestamp"))
         if not is_new:
             self._dirty_sigs.add(sig_id)   # 已有签名统计变化 → 检索缓存需刷新
+        note = rec.get("llm_note")
         self._pending.append((sig_id, record_id, {
             "latency_ms": latency,
             "effect": effect,
@@ -304,6 +312,7 @@ class SQLiteStore(MemoryStore):
             "anomalies": json.dumps(critical, ensure_ascii=False)
                          if critical else None,
             "ts": rec.get("timestamp"),
+            "llm_note": note if isinstance(note, str) and note else None,
         }))
         self._exec_total += 1
 
@@ -322,7 +331,7 @@ class SQLiteStore(MemoryStore):
                       for k, v in agg.items() if k != "payload" and k != "first_ts"}
                 for sid, agg in self._sigs.items()}
         return {
-            "version": 5,
+            "version": 6,
             "next_seq": self._next_seq,
             "exec_total": self._exec_total,
             "evaluations": _copy.deepcopy(self._evaluations),
@@ -383,10 +392,11 @@ class SQLiteStore(MemoryStore):
                         (sig_id, payload_json, agg["first_ts"]))
                 conn.execute(
                     "INSERT OR IGNORE INTO executions "
-                    "(exec_id, sig_id, latency_ms, effect, status, anomalies, ts) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "(exec_id, sig_id, latency_ms, effect, status, anomalies, ts, "
+                    "llm_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (exec_id, sig_id, ex.get("latency_ms"), ex.get("effect"),
-                     ex.get("status"), ex.get("anomalies"), ex.get("ts")))
+                     ex.get("status"), ex.get("anomalies"), ex.get("ts"),
+                     ex.get("llm_note")))
             meta = payload["meta"]
             conn.executemany(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
@@ -478,11 +488,17 @@ class SQLiteStore(MemoryStore):
             return None
         conn = self._connect()
         row = conn.execute(
-            "SELECT sig_id FROM executions WHERE exec_id = ?", (record_id,)).fetchone()
+            "SELECT sig_id, llm_note FROM executions WHERE exec_id = ?",
+            (record_id,)).fetchone()
         if row is None:
             return None
         agg = self._sigs.get(row[0])
-        return self._signature_record(row[0], agg) if agg else None
+        if not agg:
+            return None
+        record = self._signature_record(row[0], agg)
+        if row[1]:
+            record["llm_note"] = row[1]
+        return record
 
     def count(self) -> int:
         """执行总数（原始事实条数）。"""

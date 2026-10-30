@@ -10,6 +10,11 @@
     result = analyze("SELECT s1 FROM root.sg1.d1 WHERE time >= 1640966400000", query_id="q1")
 """
 
-from mataof.agents.query_analysis.agent import QueryAnalysisAgent, analyze, default_agent
+from mataof.agents.query_analysis.agent import (
+    QueryAnalysisAgent,
+    analyze,
+    default_agent,
+    run_agent,
+)
 
-__all__ = ["QueryAnalysisAgent", "analyze", "default_agent"]
+__all__ = ["QueryAnalysisAgent", "analyze", "run_agent", "default_agent"]

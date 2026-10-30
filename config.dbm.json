@@ -1,7 +1,7 @@
 {
-  "knowledge_store": "data/knowledge.db",
+  "knowledge_store": "data/knowledge_agent.db",
   "knowledge_backend": "sqlite",
-  "results_dir": "results/round_dbm",
+  "results_dir": "results/round_agent_dbm",
   "executor": {
     "type": "iotdb",
     "host": "127.0.0.1",
@@ -21,5 +21,35 @@
   "reference_time": null,
   "knowledge_save_interval": 500,
   "async_drain_timeout": 0,
+  "agents": {
+    "enabled": true,
+    "llm_shared": false,
+    "control": "agent",
+    "query_analysis": {
+      "llm_policy": "on_gap",
+      "confidence_threshold": 0.5,
+      "deadline_ms": 10000
+    },
+    "optimization_decision": {
+      "max_attempts": 2,
+      "deadline_ms": 30000,
+      "replan_on": [
+        "degraded",
+        "failed"
+      ],
+      "recall_on_empty_evidence": true,
+      "recall_max_records": null
+    },
+    "execution_monitoring": {
+      "llm_policy": "on_anomaly",
+      "deadline_ms": 5000
+    },
+    "knowledge_memory": {
+      "min_strong": 1,
+      "max_rounds": 2,
+      "expand_factor": 2,
+      "deadline_ms": 2000
+    }
+  },
   "device_inventory_file": "data/device_inventory.json"
 }

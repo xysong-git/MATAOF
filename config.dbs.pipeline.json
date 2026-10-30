@@ -1,0 +1,55 @@
+{
+  "knowledge_store": "data/knowledge_pipeline.db",
+  "knowledge_backend": "sqlite",
+  "results_dir": "results/round_pipeline_dbs",
+  "executor": {
+    "type": "iotdb",
+    "host": "127.0.0.1",
+    "port": 6667,
+    "user": "root",
+    "password": "root",
+    "fetch_size": 1024,
+    "measure_baseline": false
+  },
+  "database_state": {
+    "data_scale_level": "small"
+  },
+  "system_state": {},
+  "candidate_strategies": null,
+  "baseline_strategy": null,
+  "thresholds": {},
+  "reference_time": null,
+  "knowledge_save_interval": 500,
+  "async_drain_timeout": 0,
+  "agents": {
+    "enabled": true,
+    "llm_shared": false,
+    "control": "pipeline",
+    "query_analysis": {
+      "llm_policy": "on_gap",
+      "confidence_threshold": 0.5,
+      "deadline_ms": 10000
+    },
+    "optimization_decision": {
+      "max_attempts": 2,
+      "deadline_ms": 30000,
+      "replan_on": [
+        "degraded",
+        "failed"
+      ],
+      "recall_on_empty_evidence": true,
+      "recall_max_records": null
+    },
+    "execution_monitoring": {
+      "llm_policy": "on_anomaly",
+      "deadline_ms": 5000
+    },
+    "knowledge_memory": {
+      "min_strong": 1,
+      "max_rounds": 2,
+      "expand_factor": 2,
+      "deadline_ms": 2000
+    }
+  },
+  "device_inventory_file": "data/device_inventory.json"
+}

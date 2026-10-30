@@ -105,7 +105,8 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
     e2e_samples: list = []
     stage_samples: dict = {k: [] for k in (
         "analysis_ms", "retrieval_ms", "decision_ms", "monitoring_ms",
-        "knowledge_update_ms", "pipeline_overhead_ms", "llm_backfill_ms")}
+        "post_llm_ms", "knowledge_update_ms", "pipeline_overhead_ms",
+        "llm_backfill_ms")}
     assessments: dict = {}
     cpu_samples: list = []
     cpu_peak_samples: list = []
@@ -173,6 +174,7 @@ def batch_summary(traces: list, total_time_s: Optional[float] = None) -> dict:
             "retrieval_ms": cost_stats(stage_samples["retrieval_ms"]),
             "decision_ms": cost_stats(stage_samples["decision_ms"]),
             "monitoring_ms": cost_stats(stage_samples["monitoring_ms"]),
+            "post_llm_ms": cost_stats(stage_samples["post_llm_ms"]),
             "knowledge_update_ms": cost_stats(stage_samples["knowledge_update_ms"]),
             "pipeline_total_ms": cost_stats(stage_samples["pipeline_overhead_ms"]),
             "llm_backfill_ms": cost_stats(stage_samples["llm_backfill_ms"]),
@@ -220,6 +222,7 @@ def format_batch_summary(s: dict, title: str = "执行汇总（本批次）") ->
         parts = []
         for key, label in (("analysis_ms", "分析"), ("retrieval_ms", "检索"),
                            ("decision_ms", "决策"), ("monitoring_ms", "监控"),
+                           ("post_llm_ms", "执行后LLM"),
                            ("knowledge_update_ms", "入库")):
             st = sc.get(key) or {}
             if st.get("avg_ms") is not None:

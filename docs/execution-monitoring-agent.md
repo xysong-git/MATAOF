@@ -130,8 +130,10 @@
 - `performance_summary`：性能复述（llm_generated）；
 - `anomaly_summary`：异常关联解读——只允许"同时发生/同时观测到"，**禁止因果归因**
   与策略建议（监控只记录，不改策略）；无异常 → null；
-- **数字级防虚构校验**：LLM 输出中的每个数字（量级）必须出现在给定监控数据中，
-  出现编造数字 → 对应字段置 null + notes——"绝不虚构实验结果"落实到数字级；
+- **数字级防虚构校验**：LLM 输出中的每个数字（量级）必须出现在给定监控数据中
+  （metrics、baseline_comparison、performance_change、confidence，以及 anomalies
+  的 observed/reference/description）；出现编造数字 → 对应字段置 null + notes——
+  "绝不虚构实验结果"落实到数字级；
 - **确定性兜底**：LLM 未启用/失败/非法输出 → `available=false` + notes，
   事实字段完全不变；
 - 非确定性说明：`llm_analysis` 节受模型随机性影响；metrics / 判断 / 异常等
@@ -148,7 +150,39 @@
   performance_assessment + anomalies` 可直接作为历史记录的事实来源
   （记录装配与相似检索由 Knowledge Memory Agent 完成）。
 
-## 8. 验证方式
+## 9. Agent 运行时模式（可选，默认关闭）
+
+`monitor()` 保留为纯确定性入口；`run_agent()` / `agent.run()` 把事实采集拆成
+一条有界流水线：
+
+```
+Act(normalize_facts) → 有指标且有 baseline → Act(compare_baseline)
+                     → Act(assess_effect) → Act(detect_anomalies)
+                     → 异常或 failed/timeout → Act(llm_annotate)
+                       （默认 on_anomaly；degraded 本身不触发，消融策略才纳入）
+```
+
+- **跳过比较是显式决策**：无 baseline → `comparison_skip_reason="no_baseline"`；
+  有 baseline 但无有效实测指标 → `"no_metrics"`；两种情况都继续评估与异常识别。
+- **LLM 触发条件**：`llm_policy="on_anomaly"`（默认）时，仅当 `anomalies` 非空
+  或执行状态为 `failed`/`timeout` 才调用；`on_anomaly_or_degraded` 额外把
+  `degraded` 纳入（消融）；也支持 `always`/`never`。
+- **避免重复调用**：`external_llm=True`（Runner 统一管理解读）时 Agent 不调用
+  LLM，记录 `runner_manages_llm`。`agents.llm_shared=true` 时 Runner 用同一
+  `llm_policy`（`llm_interpretation_needed`）门控监控解读调用；该调用只产出
+  监控解读，不再兼产 KM 经验总结（后者由 KM 按查询形状单独收口）；未触发时
+  写 `available=false` + 跳过原因，不发起调用。
+- **终止原因**：`monitored`、`normalize_failed`（事实采集失败，输出 unknown/null）。
+- **配置**：`agents.execution_monitoring`（`enabled`、`llm_policy`、`deadline_ms`）。
+- **输出**：`{"monitoring": <原输出>, "agent": <运行元数据>}`；事实字段与
+  `monitor()` 一致（测试逐字段校验）。
+- **总线端点**：主链路以 `execution_monitoring` 注册，`monitor` 意图的请求携带
+  `monitoring_input` 与 `external_llm`，响应返回监控结果与 Agent 元数据；
+  OD 的执行工具与 Runner 都经此端点请求监控。
+
+## 10. 验证方式
 
 - 单元测试：`pytest tests/test_execution_monitoring_agent.py`（26 例）；
+  运行时闭环：`pytest tests/test_em_agent_loop.py`（事实等价、跳过比较、LLM 触发、
+  外部 LLM、采集失败兜底、配置钳制）；
 - 全量回归：`pytest tests/`。

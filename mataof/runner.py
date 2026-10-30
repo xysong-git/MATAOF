@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
@@ -27,12 +28,18 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from mataof.agents.query_analysis import analyze
+from mataof.agents.query_analysis import run_agent as run_query_analysis_agent
 from mataof.agents.optimization_decision import decide, run_agent
-from mataof.agents.execution_monitoring import monitor
+from mataof.agents.execution_monitoring import (
+    llm_interpretation_needed,
+    monitor,
+)
+from mataof.agents.execution_monitoring import run_agent as run_monitoring_agent
 from mataof.agents.knowledge_memory import KnowledgeMemoryAgent
 from mataof.executors import build_executor
 from mataof.executors.base import ExecutionResult, Executor
 from mataof.llm import build_llm_client
+from mataof.runtime import AgentBus, AgentMessage
 from mataof.similarity import (baseline_sample_adequate, build_history_evidence,
                                compact_features, same_shape_evidence)
 
@@ -149,6 +156,36 @@ def validate_device_inventory(inventory: Any,
 
 
 _BASELINE_PLAN_ID = "baseline_single_df"
+
+# 四个 Agent 的配置名（与 agents 配置节同名）
+_AGENT_NAMES = ("query_analysis", "optimization_decision",
+                "execution_monitoring", "knowledge_memory")
+
+
+def resolve_agents_config(agents: Any, legacy_agent: Any = None) -> dict:
+    """解析四 Agent 的启用状态与配置。
+
+    - `agents.enabled` 是全局默认值；某个 Agent 自己声明 enabled 时优先生效
+      （便于单 Agent 消融）；
+    - 兼容旧配置 `agent`：等价于 `agents.optimization_decision`；
+      两者的字段合并，新配置同名键优先；
+    - 返回每个 Agent 的配置副本，保证含 `enabled` 布尔键。
+    """
+    raw = agents if isinstance(agents, dict) else {}
+    default_enabled = bool(raw.get("enabled", False))
+    legacy = legacy_agent if isinstance(legacy_agent, dict) else {}
+    out: dict = {}
+    for name in _AGENT_NAMES:
+        section = raw.get(name)
+        section = dict(section) if isinstance(section, dict) else {}
+        if name == "optimization_decision":
+            section = {**legacy, **section}
+        if "enabled" not in section:
+            section["enabled"] = default_enabled
+        else:
+            section["enabled"] = bool(section["enabled"])
+        out[name] = section
+    return out
 
 # baseline 样本充分性口径见 mataof.similarity.baseline_sample_adequate
 # （与决策成本模型共用）：少于 3 次或不足同计划证据的 10% → 不充分，
@@ -323,7 +360,12 @@ class RunnerConfig:
     # Agent 闭环（默认关闭）：决策 → 执行 → 观察 →（退化时）重规划。
     # {"enabled": true, "max_attempts": 2, "deadline_ms": 30000,
     #  "replan_on": ["degraded", "failed"]}
+    # 兼容旧配置；等价于 agents.optimization_decision。
     agent: dict = field(default_factory=dict)
+    # 四 Agent 运行时配置（默认全部关闭）：
+    # {"enabled": false, "query_analysis": {...}, "optimization_decision": {...},
+    #  "execution_monitoring": {...}, "knowledge_memory": {...}}
+    agents: dict = field(default_factory=dict)
     plan_max_parallelism: int = 8               # 计划子查询最大并行度
     plan_min_saving_ms: Optional[float] = None  # 计划净收益门槛（缺省 → 成本模型默认）
     plan_min_saving_ratio: Optional[float] = None
@@ -416,9 +458,38 @@ class PipelineRunner:
                                        save_interval=config.knowledge_save_interval,
                                        backend=config.knowledge_backend)
         self.executor: Executor = build_executor(config.executor)
-        # Agent 闭环配置（默认关闭 → 保持原确定性流水线；不影响既有实验）
-        self.agent_config = dict(config.agent or {})
+        # Agent 配置（默认关闭 → 保持原确定性流水线；不影响既有实验）。
+        # agents 是新的四 Agent 配置；旧 agent 节映射到 optimization_decision。
+        self.agents_config = resolve_agents_config(config.agents, config.agent)
+        self.agent_config = dict(self.agents_config["optimization_decision"])
         self._agent_enabled = bool(self.agent_config.get("enabled"))
+        self._qa_agent_enabled = bool(
+            self.agents_config["query_analysis"].get("enabled"))
+        self._em_agent_enabled = bool(
+            self.agents_config["execution_monitoring"].get("enabled"))
+        self._km_agent_enabled = bool(
+            self.agents_config["knowledge_memory"].get("enabled"))
+        # 只要任一 Agent 启用，主链路就走消息总线（各端点按配置选择 Agent/
+        # 确定性实现）；全部关闭时保持旧的直接调用路径。
+        self._bus_enabled = bool(
+            self._agent_enabled or self._qa_agent_enabled
+            or self._em_agent_enabled or self._km_agent_enabled)
+        # B（LLM 常驻）：同一 LLM 客户端按各 Agent 的 llm_policy 共享给
+        # QA/EM/KM；默认关闭，保持旧路径（llm_primary 只给 OD）。
+        agents_raw = config.agents if isinstance(config.agents, dict) else {}
+        self._agents_llm_shared = bool(agents_raw.get("llm_shared", False))
+        # 控制流（2×2 对照的“控制流”维度）：
+        # - "agent"（默认）：观察驱动闭环——OD 可 replan、空证据可 recall、
+        #   KM 可按观察扩 top-K；
+        # - "pipeline"：固定流水线——单次决策/执行、固定 top-K 检索，
+        #   不做 replan/recall/自适应扩 K；组件与 LLM 调用点保持一致。
+        control = str(agents_raw.get("control") or "agent").strip().lower()
+        if control not in ("agent", "pipeline"):
+            print(f"[runner] 注意: agents.control={control!r} 非法，回退 agent",
+                  flush=True)
+            control = "agent"
+        self._agents_control = control
+        self._pipeline_mode = control == "pipeline"
         # 计划生成设备清单（通配 FROM 展开；None → 设备/混合分区计划不生成）
         self.device_inventory = load_device_inventory(
             config.device_inventory, config.device_inventory_file)
@@ -480,11 +551,211 @@ class PipelineRunner:
             return True
         return seq % self._llm_every == 0
 
+    def _post_llm_policy(self) -> str:
+        """执行后 LLM 的触发策略（与 EM Agent 的 llm_policy 同口径）。"""
+        section = self.agents_config.get("execution_monitoring") or {}
+        policy = section.get("llm_policy") if isinstance(section, dict) else None
+        return policy if isinstance(policy, str) and policy else "on_anomaly"
+
+    def _control_flow_label(self) -> str:
+        """本次运行的控制流口径（写入 trace/run_log，供 2×2 实验聚合）。"""
+        if self.config.fixed_strategy:
+            return "fixed_strategy"
+        if self._pipeline_mode:
+            return "pipeline"
+        if self._bus_enabled:
+            return "agent"
+        return "legacy"
+
+    def _should_post_llm(self, feedback: dict) -> bool:
+        """执行后监控解读是否触发。
+
+        旧路径（llm_shared=false）保持原语义：llm_post 非空即调用；
+        B（llm_shared=true）按 EM 的 llm_policy 触发（默认仅异常/失败）。
+        """
+        if not self._agents_llm_shared:
+            return True
+        return llm_interpretation_needed(feedback, self._post_llm_policy())
+
+    def _post_llm_skipped(self) -> dict:
+        """共享 LLM 模式下未触发执行后调用时的诚实占位（不伪造解读）。"""
+        policy = self._post_llm_policy()
+        if policy == "never":
+            reason = "llm_policy=never，跳过执行后监控 LLM 解读"
+        elif policy == "on_anomaly":
+            reason = "无异常且未失败，按 llm_policy=on_anomaly 跳过执行后监控 LLM 解读"
+        else:
+            reason = (f"无异常且未退化，按 llm_policy={policy} "
+                      "跳过执行后监控 LLM 解读")
+        return {
+            "available": False,
+            "performance_summary": None,
+            "anomaly_summary": None,
+            "notes": [reason],
+        }
+
+    # ------------------------------------------------------------------
+    # Agent 端点（消息总线）
+    # ------------------------------------------------------------------
+    def _analyze_query(self, query: str, query_id: str,
+                       llm_qa: Optional[object] = None
+                       ) -> tuple[dict, Optional[dict]]:
+        """分析入口：QA Agent 或确定性实现，返回 (analysis, Agent 元数据)。"""
+        if self._qa_agent_enabled:
+            out = run_query_analysis_agent(
+                query, query_id=query_id,
+                database_state=self.config.database_state,
+                llm=llm_qa,
+                agent_config=self.agents_config["query_analysis"],
+            )
+            return out["analysis"], out.get("agent")
+        return analyze(query, query_id=query_id, llm=llm_qa), None
+
+    def _retrieve_knowledge(self, analysis: dict, query_id: str,
+                            max_records: Optional[int] = None,
+                            fixed_topk: bool = False
+                            ) -> tuple[dict, Optional[dict]]:
+        """检索入口：KM Agent 或确定性实现，返回 (retrieval, Agent 元数据)。
+
+        fixed_topk=True（pipeline 控制流）：强制单轮检索，不按观察扩 top-K；
+        仍复用 KM Agent 的单步运行器，保证与 agent 模式的组件/LLM 调用点一致。
+        """
+        if self._km_agent_enabled:
+            agent_config = dict(self.agents_config["knowledge_memory"])
+            if fixed_topk:
+                agent_config["max_rounds"] = 1
+            out = self.km.run_retrieve(
+                analysis,
+                database_state=self.config.database_state,
+                system_state=self.config.system_state, query_id=query_id,
+                llm_summary=False,
+                max_records=max_records,
+                summary=False,
+                agent_config=agent_config,
+            )
+            return out["retrieval"], out.get("agent")
+        return self.km.retrieve(
+            analysis, database_state=self.config.database_state,
+            system_state=self.config.system_state, query_id=query_id,
+            llm_summary=False, max_records=max_records, summary=False,
+        ), None
+
+    def _recall_max_records(self) -> int:
+        """OD 补充证据请求的 top-K：必须比首轮更宽，否则没有补充意义。"""
+        initial = int(self.config.knowledge_max_records or 100)
+        configured = self.agent_config.get("recall_max_records")
+        if (isinstance(configured, int) and not isinstance(configured, bool)
+                and configured > 0):
+            value = configured
+        else:
+            value = max(200, initial * 2)
+        return max(int(value), initial + 1)
+
+    @staticmethod
+    def _bus_request(bus: AgentBus, sender: str, recipient: str,
+                     intent: str, payload: Optional[dict] = None
+                     ) -> tuple[Optional[dict], Optional[str]]:
+        """发送一次请求-响应；失败返回 (None, 错误文本)，由调用方决定兜底。"""
+        reply = bus.send(AgentMessage(
+            sender=sender, recipient=recipient, intent=intent,
+            payload=payload or {},
+        ))
+        if reply.intent == "error":
+            return None, reply.meta.get("error") or "未知总线错误"
+        return reply.payload or {}, None
+
+    def _make_bus(self, ctx: dict) -> AgentBus:
+        """为单条查询构建消息总线端点（消息只携带小型参数，查询上下文由
+        ctx 捕获；大对象不重复写入消息 trace）。"""
+        bus = AgentBus()
+
+        def handle_analyze(message: AgentMessage) -> dict:
+            analysis, meta = self._analyze_query(
+                ctx["query"], ctx["query_id"], ctx.get("llm_qa"))
+            ctx["analysis"] = analysis
+            return {"analysis": analysis, "agent": meta}
+
+        def handle_knowledge(message: AgentMessage) -> dict:
+            analysis = ctx.get("analysis")
+            if not isinstance(analysis, dict):
+                raise ValueError("知识检索前缺少 query_analysis")
+            if message.intent in ("retrieve", "recall"):
+                result, meta = self._retrieve_knowledge(
+                    analysis, ctx["query_id"],
+                    max_records=message.payload.get("max_records"),
+                    fixed_topk=(self._pipeline_mode
+                                and message.intent == "retrieve"))
+                return {"retrieval": result, "agent": meta}
+            if message.intent == "remember":
+                feedback_input = ctx.get("feedback_input")
+                if not isinstance(feedback_input, dict):
+                    raise ValueError("知识入库前缺少 feedback_input")
+                llm_km = ctx.get("llm_km")
+                return {"update": self.km.update(
+                    feedback_input,
+                    experience_note=ctx.get("experience_note"),
+                    use_llm=llm_km is not None,
+                    llm=llm_km,
+                )}
+            raise ValueError(
+                f"知识记忆 Agent 不支持 intent={message.intent!r}")
+
+        def handle_monitor(message: AgentMessage) -> dict:
+            monitoring_input = message.payload.get("monitoring_input")
+            if not isinstance(monitoring_input, dict):
+                raise ValueError("监控请求缺少 monitoring_input")
+            external = bool(message.payload.get("external_llm", False))
+            monitoring, meta = self._monitor_impl(
+                monitoring_input,
+                llm=None if external else ctx.get("llm"),
+                external_llm=external,
+            )
+            return {"monitoring": monitoring, "agent": meta}
+
+        bus.register("query_analysis", handle_analyze)
+        bus.register("knowledge_memory", handle_knowledge)
+        bus.register("execution_monitoring", handle_monitor)
+        return bus
+
     # ------------------------------------------------------------------
     # 执行 + 监控（非 Agent 路径与 Agent 执行工具共用）
     # ------------------------------------------------------------------
+    def _monitor_impl(self, monitoring_input: dict,
+                      llm: Optional[object] = None,
+                      external_llm: bool = False
+                      ) -> tuple[dict, Optional[dict]]:
+        """监控实现：统一确定性路径与 Agent 路径。"""
+        if self._em_agent_enabled:
+            out = run_monitoring_agent(
+                monitoring_input, llm=llm,
+                agent_config=self.agents_config["execution_monitoring"],
+                external_llm=external_llm,
+            )
+            return out["monitoring"], out.get("agent")
+        return monitor(monitoring_input, llm=llm), None
+
+    def _monitor(self, monitoring_input: dict, llm: Optional[object] = None,
+                 external_llm: bool = False, bus: Optional[AgentBus] = None,
+                 sender: str = "runner") -> tuple[dict, Optional[dict]]:
+        """监控入口：有总线时向监控 Agent 发请求；失败回退直接实现。"""
+        if bus is None:
+            return self._monitor_impl(monitoring_input, llm=llm,
+                                      external_llm=external_llm)
+        payload, error = self._bus_request(
+            bus, sender, "execution_monitoring", "monitor",
+            {"monitoring_input": monitoring_input,
+             "external_llm": bool(external_llm)},
+        )
+        if error is None and isinstance(payload.get("monitoring"), dict):
+            return payload["monitoring"], payload.get("agent")
+        # 总线失败：错误已写入 bus.trace，这里回退到直接实现保证查询继续
+        return self._monitor_impl(monitoring_input, llm=llm,
+                                  external_llm=external_llm)
+
     def _execute_and_monitor(self, decision: dict, query: str, query_id: str,
-                             analysis: dict, historical_records: Any) -> dict:
+                             analysis: dict, historical_records: Any,
+                             bus: Optional[AgentBus] = None,
+                             monitor_sender: str = "runner") -> dict:
         """执行一次决策并生成监控反馈；返回可序列化的执行事实与计时。"""
         t_exec = time.perf_counter()
         execution: ExecutionResult = self.executor.execute(
@@ -510,9 +781,13 @@ class PipelineRunner:
             "historical_reference": reference,
             "thresholds": self.config.thresholds or None,
         }
-        feedback = monitor(monitoring_input, llm=None)
+        # 监控 Agent 的 LLM 解读由 runner 的合并调用统一管理（不重复调用）
+        feedback, monitoring_agent = self._monitor(
+            monitoring_input, llm=None, external_llm=True,
+            bus=bus, sender=monitor_sender)
         monitoring_ms = (time.perf_counter() - t_mon) * 1000.0
         return {
+            "agent": monitoring_agent,
             "execution": {
                 "execution_status": execution.execution_status,
                 "failure_reason": execution.failure_reason,
@@ -528,11 +803,13 @@ class PipelineRunner:
         }
 
     def _agent_execute_tool(self, decision: dict, query: str, query_id: str,
-                            analysis: dict, historical_records: Any) -> dict:
+                            analysis: dict, historical_records: Any,
+                            bus: Optional[AgentBus] = None) -> dict:
         """Agent 的执行工具：异常也转成事实性的失败结果，不中断控制环。"""
         try:
             return self._execute_and_monitor(
-                decision, query, query_id, analysis, historical_records)
+                decision, query, query_id, analysis, historical_records,
+                bus=bus, monitor_sender="optimization_decision")
         except Exception as exc:   # 执行层异常 → failed（真实错误文本，不编造）
             reason = f"{type(exc).__name__}: {exc}"
             monitoring_input = {
@@ -545,7 +822,11 @@ class PipelineRunner:
                 "historical_reference": None,
                 "thresholds": self.config.thresholds or None,
             }
+            feedback, monitoring_agent = self._monitor(
+                monitoring_input, llm=None, external_llm=True,
+                bus=bus, sender="optimization_decision")
             return {
+                "agent": monitoring_agent,
                 "execution": {
                     "execution_status": "failed",
                     "failure_reason": reason,
@@ -553,7 +834,7 @@ class PipelineRunner:
                     "baseline_metrics": None,
                     "timestamp": None,
                 },
-                "monitoring": monitor(monitoring_input, llm=None),
+                "monitoring": feedback,
                 "monitoring_reference": None,
                 "monitoring_input": monitoring_input,
                 "execution_ms": 0.0,
@@ -581,27 +862,72 @@ class PipelineRunner:
             query_id = f"{self.run_id}-{seq:04d}"
 
         llm = self._llm_for_query()   # 采样控制；未采样 → 确定性快路径
-        # 决策模式：LLM 只用于决策（QA 解读/监控解读关闭——每条查询恰好 1 次 LLM
-        # 调用 + 输出缓存）；其余模式 llm 照常用于解读增强
-        llm_qa = None if self._llm_decide else llm
+        # LLM 路由：
+        # - 默认（llm_shared=false）：旧行为——llm_primary 只给 OD，其余模式
+        #   的 llm 照常用于解读增强；
+        # - llm_shared=true（B/方案一）：同一客户端按各 Agent 的 llm_policy
+        #   共享；QA 仅在启用时接收；执行后监控解读由 EM 的 llm_policy 门控
+        #   （默认仅异常/失败）；KM 经验总结按查询形状单独生成（同一形状
+        #   只调用一次，见 KnowledgeMemoryAgent.update）。
+        if self._agents_llm_shared:
+            llm_qa = llm if self._qa_agent_enabled else None
+            llm_post = llm if self._em_agent_enabled else None
+            llm_km = llm if self._km_agent_enabled else None
+        else:
+            llm_qa = None if self._llm_decide else llm
+            llm_post = llm_qa
+            llm_km = None
+
+        # 单查询消息总线：任一 Agent 启用时，主链路通过总线调用各 Agent 端点。
+        bus_ctx = {
+            "query": query, "query_id": query_id,
+            "llm": llm, "llm_qa": llm_qa, "llm_km": llm_km,
+            "analysis": None, "feedback_input": None, "experience_note": None,
+        }
+        bus = self._make_bus(bus_ctx) if self._bus_enabled else None
 
         # 1. 分析（LLM 增强可选；不可用自动回退确定性路径）
-        analysis = analyze(query, query_id=query_id, llm=llm_qa)
+        qa_agent_meta = None
+        analysis = None
+        if bus is not None:
+            payload, error = self._bus_request(
+                bus, "runner", "query_analysis", "analyze",
+                {"query_id": query_id})
+            if error is None:
+                analysis = payload.get("analysis")
+                qa_agent_meta = payload.get("agent")
+            if not isinstance(analysis, dict):
+                # 总线失败或载荷非法：直接走分析实现，保证查询继续
+                analysis, qa_agent_meta = self._analyze_query(
+                    query, query_id, llm_qa)
+        else:
+            analysis, qa_agent_meta = self._analyze_query(
+                query, query_id, llm_qa)
+        bus_ctx["analysis"] = analysis
         t_analysis = time.perf_counter()
         # 2. 知识检索（历史证据；runner 链路关闭检索解读 LLM——决策只消费结构化记录）
         #    fixed 模式（Baseline 2）不使用历史，跳过检索
+        km_agent_meta = None
         if self.config.fixed_strategy:
             km_result = {"matched_count": 0, "knowledge_confidence": 0.0,
                          "matched_records_for_decision": [],
                          "strategy_evaluations": {}}
+        elif bus is not None:
+            payload, error = self._bus_request(
+                bus, "runner", "knowledge_memory", "retrieve",
+                {"query_id": query_id,
+                 "max_records": self.config.knowledge_max_records})
+            if error is None:
+                km_result = payload.get("retrieval")
+                km_agent_meta = payload.get("agent")
+            if not isinstance(km_result, dict):
+                km_result, km_agent_meta = self._retrieve_knowledge(
+                    analysis, query_id, self.config.knowledge_max_records,
+                    fixed_topk=self._pipeline_mode)
         else:
-            km_result = self.km.retrieve(
-                analysis, database_state=self.config.database_state,
-                system_state=self.config.system_state, query_id=query_id,
-                llm_summary=False,
-                max_records=self.config.knowledge_max_records,
-                summary=False,   # 决策路径：跳过展示聚合（成本与库大小解耦）
-            )
+            km_result, km_agent_meta = self._retrieve_knowledge(
+                analysis, query_id, self.config.knowledge_max_records,
+                fixed_topk=self._pipeline_mode)
         t_retrieval = time.perf_counter()
         # 3. 决策（LLM 增强可选；候选策略/可执行计划由决策 Agent 按查询生成）
         planning = dict(self.config.planning or {})
@@ -630,26 +956,71 @@ class PipelineRunner:
             "planning": planning,
         }
         agent_meta = None
+        em_agent_meta = None
         if self.config.fixed_strategy:
             decision = self._fixed_decision(analysis, query_id)
             t_decision = time.perf_counter()
             execution_info = self._execute_and_monitor(
                 decision, query, query_id, analysis,
                 km_result.get("matched_records_for_decision"),
+                bus=bus,
             )
+            em_agent_meta = execution_info.get("agent")
             t_end = time.perf_counter()
-        elif self._agent_enabled:
+        elif self._agent_enabled and not self._pipeline_mode:
             # Agent 闭环：决策 → 执行 → 观察 →（退化时）重规划 → 终止。
             historical_records = km_result.get("matched_records_for_decision") or []
+
+            def recall_evidence() -> dict:
+                """OD → KM：证据为空时请求一次更宽的历史检索。"""
+                payload, error = self._bus_request(
+                    bus, "optimization_decision", "knowledge_memory",
+                    "recall",
+                    {"query_id": query_id,
+                     "max_records": self._recall_max_records(),
+                     "reason": "empty_evidence"})
+                if error is not None:
+                    return {"ok": False, "error": error,
+                            "historical_records": []}
+                retrieval = payload.get("retrieval") or {}
+                meta = payload.get("agent")
+                return {
+                    "ok": True,
+                    "historical_records":
+                        retrieval.get("matched_records_for_decision") or [],
+                    "retrieval": {
+                        "matched_count":
+                            len(retrieval.get("matched_records") or []),
+                        "usable_count":
+                            len(retrieval.get(
+                                "matched_records_for_decision") or []),
+                        "knowledge_confidence":
+                            retrieval.get("knowledge_confidence"),
+                        "truncated": retrieval.get("truncated"),
+                    },
+                    # 补充检索也是一次 Agent 运行，摘要写入 evidence_recall
+                    "agent": ({
+                        "steps": meta.get("steps"),
+                        "terminated_by": meta.get("terminated_by"),
+                        "retrieval_termination":
+                            meta.get("retrieval_termination"),
+                        "final_max_records": meta.get("final_max_records"),
+                        "retrieval_ms_total": meta.get("retrieval_ms_total"),
+                    } if isinstance(meta, dict) else None),
+                }
+
             agent_out = run_agent(
                 decision_input,
                 execute=lambda decision: self._agent_execute_tool(
-                    decision, query, query_id, analysis, historical_records),
+                    decision, query, query_id, analysis, historical_records,
+                    bus=bus),
+                recall=recall_evidence if bus is not None else None,
                 agent_config=self.agent_config,
                 llm=llm, llm_decide=self._llm_decide,
             )
             decision = agent_out.get("decision") or {}
             agent_meta = agent_out.get("agent") or {}
+            em_agent_meta = agent_out.get("monitoring_agent")
             execution_info = {
                 "execution": agent_out.get("execution") or {},
                 "monitoring": agent_out.get("monitoring") or {},
@@ -659,12 +1030,16 @@ class PipelineRunner:
             t_decision = time.perf_counter()
             t_end = t_decision
         else:
+            # pipeline 控制流（或未启用 OD Agent）：单次决策 + 单次执行，
+            # 不进入观察驱动闭环；LLM 调用点与 agent 模式保持一致。
             decision = decide(decision_input, llm=llm, llm_decide=self._llm_decide)
             t_decision = time.perf_counter()
             execution_info = self._execute_and_monitor(
                 decision, query, query_id, analysis,
                 km_result.get("matched_records_for_decision"),
+                bus=bus,
             )
+            em_agent_meta = execution_info.get("agent")
             t_end = time.perf_counter()
 
         # 4/5. 执行与监控结果（两种路径统一为可序列化字典）
@@ -679,14 +1054,20 @@ class PipelineRunner:
         else:
             final_mon_ms = float(execution_info.get("monitoring_ms") or 0.0)
         t_execution = t_end - final_mon_ms / 1000.0
-        # B1：合并 LLM 调用（监控解读 + KM 经验总结一次完成，4→3 次/条）
-        # 决策模式下关闭（LLM 仅用于决策，每条查询恰好 1 次调用 + 输出缓存）
+        # 执行后 LLM：
+        # - llm_shared=false：旧语义，llm_post 非空即调用（合并产出监控解读 +
+        #   KM 经验总结，llm_primary 下 llm_post 为 None）；
+        # - llm_shared=true（方案一）：llm_post 只做监控解读，由 EM 的
+        #   llm_policy 门控（默认仅异常/失败）；KM 经验总结由 KM Agent 按
+        #   查询形状单独生成（同形状只调用一次）；未触发时写诚实占位。
         experience_note: Optional[str] = None
-        if llm_qa is not None:
+        if llm_post is not None and self._should_post_llm(feedback):
             from mataof.agents.execution_monitoring.llm_enhance import (
                 build_post_execution_llm,
             )
-            combined = build_post_execution_llm(llm, monitoring_input, feedback)
+            combined = build_post_execution_llm(
+                llm_post, monitoring_input, feedback,
+                include_experience_note=not self._agents_llm_shared)
             feedback["llm_analysis"] = {
                 "available": (combined["performance_summary"] is not None
                               or combined["anomaly_summary"] is not None),
@@ -694,9 +1075,32 @@ class PipelineRunner:
                 "anomaly_summary": combined["anomaly_summary"],
                 "notes": combined["notes"],
             }
-            experience_note = combined["experience_note"]
-        # 6. 知识更新（use_llm=False：经验总结已在合并调用中生成）
-        knowledge_update = self.km.update({
+            if not self._agents_llm_shared:
+                experience_note = combined["experience_note"]
+        elif self._agents_llm_shared and llm_post is not None:
+            feedback["llm_analysis"] = self._post_llm_skipped()
+        elif self._agents_llm_shared:
+            reason = ("EM Agent 未启用，跳过执行后监控 LLM 解读"
+                      if llm_km is not None
+                      else "EM/KM Agent 均未启用，跳过执行后 LLM 调用")
+            feedback["llm_analysis"] = {
+                "available": False, "performance_summary": None,
+                "anomaly_summary": None,
+                "notes": [reason],
+            }
+        # EM Agent 自身不调用 LLM（external_llm=True），实际调用方是 Runner。
+        # 在 Agent 元数据里显式标注归属与本次是否产出解读，避免
+        # llm_used=false 被误读为“EM 未使用 LLM”。
+        if isinstance(em_agent_meta, dict) and em_agent_meta.get("enabled"):
+            em_agent_meta["llm_call_owner"] = "runner"
+            em_agent_meta["llm_interpretation_used"] = bool(
+                (feedback.get("llm_analysis") or {}).get("available"))
+        # 执行后 LLM 与知识入库分开计时：合并调用属于“执行后 LLM”，
+        # 不是入库成本（否则汇总会把数秒的 LLM 推理归因到 knowledge_update）。
+        t_post_llm = time.perf_counter()
+        # 6. 知识更新（B/方案一：KM 按查询形状生成经验总结，同一形状仅一次；
+        # 旧路径 use_llm=False，经验总结来自合并调用）
+        feedback_input = {
             "query_id": query_id,
             "query": query,
             "query_analysis": analysis,
@@ -705,14 +1109,53 @@ class PipelineRunner:
             "database_state": self.config.database_state,
             "system_state": self.config.system_state,
             "timestamp": execution.get("timestamp"),
-        }, experience_note=experience_note, use_llm=False)
+        }
+        knowledge_update = None
+        if bus is not None:
+            bus_ctx["feedback_input"] = feedback_input
+            bus_ctx["experience_note"] = experience_note
+            payload, error = self._bus_request(
+                bus, "runner", "knowledge_memory", "remember",
+                {"query_id": query_id})
+            if error is None:
+                knowledge_update = payload.get("update")
+            if not isinstance(knowledge_update, dict):
+                knowledge_update = self.km.update(
+                    feedback_input, experience_note=experience_note,
+                    use_llm=llm_km is not None, llm=llm_km)
+        else:
+            knowledge_update = self.km.update(
+                feedback_input, experience_note=experience_note,
+                use_llm=llm_km is not None, llm=llm_km)
         t_update = time.perf_counter()
+        # KM 的经验总结 LLM 调用发生在 update 内：从入库计时中扣除，
+        # 归入“执行后 LLM”，避免再次把 LLM 推理误计为入库成本。
+        km_llm_ms = 0.0
+        if isinstance(knowledge_update, dict):
+            km_llm_ms = float((knowledge_update.get("llm_analysis") or {})
+                              .get("llm_ms") or 0.0)
+
+        # 四 Agent 运行元数据（仅收集本次实际启用的 Agent；OD 的 trace["agent"] 保留）
+        agent_metas = {}
+        for name, meta in (
+            ("query_analysis", qa_agent_meta),
+            ("optimization_decision", agent_meta),
+            ("execution_monitoring", em_agent_meta),
+            ("knowledge_memory", km_agent_meta),
+        ):
+            if isinstance(meta, dict) and meta.get("enabled"):
+                agent_metas[name] = meta
 
         trace = {
             "query_id": query_id,
             "query": query,
             "source": source,          # 来源文件（run_file 传入；手动查询为空串）
             "sampling": sampling,      # 每文件采样说明（无采样为 None）
+            # 控制流/LLM 口径（2×2 实验聚合用；每个 trace 自描述，避免配置漂移）
+            "control_flow": self._control_flow_label(),
+            "llm_enabled": self.llm is not None,
+            "llm_shared": self._agents_llm_shared,
+            "decision_mode": (self.config.llm or {}).get("decision_mode"),
             "analysis": analysis,
             "knowledge_retrieval": {
                 "matched_count": len(km_result.get("matched_records") or []),
@@ -731,6 +1174,10 @@ class PipelineRunner:
             "knowledge_update": knowledge_update,
             # Agent 闭环元数据（未启用 → None）：尝试序列、终止原因、逐步 trace
             "agent": agent_meta,
+            # 四 Agent 元数据（按名称索引；未启用的 Agent 不出现）
+            "agents": agent_metas,
+            # Agent 间消息（request/response；未启用 Agent → 空列表）
+            "bus": bus.trace if bus is not None else [],
         }
         # ---- D8：优化机制各阶段成本与端到端计时（纯 runner 墙钟；不碰 Agent 输出）----
         ms = lambda t0, t1: round((t1 - t0) * 1000.0, 2)  # noqa: E731
@@ -743,7 +1190,9 @@ class PipelineRunner:
                 "decision_ms": round(float(at.get("decision_ms") or 0.0), 2),
                 "execution_stage_ms": round(float(at.get("execution_ms") or 0.0), 2),
                 "monitoring_ms": round(float(at.get("monitoring_ms") or 0.0), 2),
-                "knowledge_update_ms": ms(t_monitoring, t_update),
+                "post_llm_ms": round(ms(t_monitoring, t_post_llm) + km_llm_ms, 2),
+                "knowledge_update_ms": round(
+                    max(0.0, ms(t_post_llm, t_update) - km_llm_ms), 2),
             }
         else:
             stage = {
@@ -754,7 +1203,9 @@ class PipelineRunner:
                 # 与 response_time_ms 同一口径（客户端墙钟）
                 "execution_stage_ms": ms(t_decision, t_execution),
                 "monitoring_ms": ms(t_execution, t_monitoring),
-                "knowledge_update_ms": ms(t_monitoring, t_update),
+                "post_llm_ms": round(ms(t_monitoring, t_post_llm) + km_llm_ms, 2),
+                "knowledge_update_ms": round(
+                    max(0.0, ms(t_post_llm, t_update) - km_llm_ms), 2),
             }
         trace["overhead"] = {
             **stage,
@@ -1073,6 +1524,94 @@ class PipelineRunner:
     # ------------------------------------------------------------------
     # 追踪落盘
     # ------------------------------------------------------------------
+    @staticmethod
+    def _agent_action_profile(agent_meta: Optional[dict],
+                              agent_metas: dict) -> dict:
+        """从各 Agent 的逐步 trace 提取动作序列摘要（写入 run_log）。
+
+        不落完整动作序列（trace 文件已有），只保留：
+        - 动作哈希（相同序列 → 相同哈希，用于统计“不同控制流”数量）；
+        - 动作总数与按工具计数；
+        - 每个 Agent 的步数与终止原因。
+        """
+        metas = dict(agent_metas or {})
+        if isinstance(agent_meta, dict):
+            metas["optimization_decision"] = agent_meta
+        actions: list[str] = []
+        steps: dict = {}
+        terminations: dict = {}
+        for name in _AGENT_NAMES:
+            meta = metas.get(name)
+            if not isinstance(meta, dict) or not meta.get("enabled"):
+                continue
+            trace = meta.get("trace") or []
+            tools = [str(step.get("tool")) for step in trace
+                     if isinstance(step, dict) and step.get("tool")]
+            actions.extend(f"{name}:{tool}" for tool in tools)
+            steps[name] = int(meta.get("steps") or 0)
+            term = meta.get("terminated_by")
+            if term:
+                terminations[name] = str(term)
+        counts: dict = {}
+        for action in actions:
+            counts[action] = counts.get(action, 0) + 1
+        digest = None
+        if actions:
+            digest = hashlib.sha1(
+                json.dumps(actions, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()[:12]
+        return {
+            "agent_action_hash": digest,
+            "agent_action_count": len(actions),
+            "agent_action_counts": counts,
+            "agent_steps_by_agent": steps,
+            "agent_terminations": terminations,
+        }
+
+    @staticmethod
+    def _agent_trigger_profile(decision: dict, agent_meta: Optional[dict],
+                               agent_metas: dict, feedback: dict,
+                               knowledge_update: Optional[dict]) -> dict:
+        """记录“agent 是否真的被事件触发”（2×2 实验的行为剖面）。"""
+        metas = dict(agent_metas or {})
+        qa = metas.get("query_analysis") or {}
+        km = metas.get("knowledge_memory") or {}
+        od = agent_meta if isinstance(agent_meta, dict) else {}
+        em_la = (feedback or {}).get("llm_analysis") or {}
+        km_la = (knowledge_update or {}).get("llm_analysis") or {}
+        od_la = (decision or {}).get("llm_analysis") or {}
+        attempts = od.get("attempts") or []
+        km_reused = bool(km_la.get("note_reused"))
+        triggers = {
+            "replan": len(attempts) > 1,
+            "recall": bool(od.get("evidence_recall")),
+            "qa_llm": bool(qa.get("llm_used")),
+            "em_llm": bool(em_la.get("available")),
+            "km_llm": bool(km_la.get("available")) and not km_reused,
+            "km_note_reused": km_reused,
+            "km_adaptive_expand": int(km.get("rounds") or 0) > 1,
+            "od_llm_decision": bool(od_la.get("llm_used_for_decision"))
+            or bool(od.get("llm_used_for_decision")),
+        }
+        triggers["llm_engaged_count"] = sum(
+            1 for key in ("qa_llm", "em_llm", "km_llm", "od_llm_decision")
+            if triggers[key])
+        return triggers
+
+    @staticmethod
+    def _bus_intent_profile(bus_trace: Any) -> dict:
+        """统计总线请求 intent 分布（不把消息数本身当协作证据）。"""
+        counts: dict = {}
+        for entry in bus_trace or []:
+            if not isinstance(entry, dict):
+                continue
+            request = entry.get("request") or {}
+            intent = request.get("intent")
+            if intent:
+                key = str(intent)
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+
     def _write_trace(self, trace: dict) -> Optional[str]:
         """写完整追踪记录（防同名覆盖）并追加 run_log 汇总行；返回文件路径。"""
         if not self.config.results_dir:
@@ -1092,13 +1631,24 @@ class PipelineRunner:
         mon = trace.get("monitoring") or {}
         metrics = mon.get("metrics") or {}
         agent = trace.get("agent") or {}
+        agent_meta_map = trace.get("agents") or {}
+        recall_agent = (((agent_meta_map.get("optimization_decision") or {})
+                         .get("evidence_recall") or {}).get("agent") or {})
         ov = trace.get("overhead") or {}
         plan_entry = (decision.get("decision") or {}).get("plan") or {}
+        action_profile = self._agent_action_profile(agent, agent_meta_map)
+        trigger_profile = self._agent_trigger_profile(
+            decision, agent, agent_meta_map, mon,
+            trace.get("knowledge_update") or {})
         summary = {
             "run_id": self.run_id,
             "query_id": query_id,
             "source": trace.get("source") or "",
             "sampling": trace.get("sampling"),
+            "control_flow": trace.get("control_flow"),
+            "llm_enabled": trace.get("llm_enabled"),
+            "llm_shared": trace.get("llm_shared"),
+            "decision_mode": trace.get("decision_mode"),
             "query_type": (trace.get("analysis") or {}).get("query_type"),
             "strategy_id": (decision.get("selected_strategy") or {}).get("strategy_id"),
             "decision_status": decision.get("decision_status"),
@@ -1117,11 +1667,29 @@ class PipelineRunner:
             "agent_steps": agent.get("steps"),
             "agent_attempts": len(agent.get("attempts") or []),
             "agent_terminated_by": agent.get("terminated_by"),
+            # 四 Agent 运行时（未启用 → [] / 0）；OD 的补充检索也计入总步数
+            "agents_enabled": sorted(agent_meta_map.keys()),
+            "agent_steps_total": (
+                sum(int((m or {}).get("steps") or 0)
+                    for m in agent_meta_map.values())
+                + int(recall_agent.get("steps") or 0)),
+            "bus_messages": len(trace.get("bus") or []),
+            "bus_errors": sum(1 for e in (trace.get("bus") or [])
+                              if e.get("error")),
+            "bus_intents": self._bus_intent_profile(trace.get("bus")),
+            # 行为剖面（2×2 对照：agent 是否真的产生了不同控制流）
+            "agent_action_hash": action_profile["agent_action_hash"],
+            "agent_action_count": action_profile["agent_action_count"],
+            "agent_action_counts": action_profile["agent_action_counts"],
+            "agent_steps_by_agent": action_profile["agent_steps_by_agent"],
+            "agent_terminations": action_profile["agent_terminations"],
+            "agent_triggers": trigger_profile,
             # D8：优化机制各阶段成本 + 端到端（run_log 供轮次汇总聚合）
             "analysis_ms": ov.get("analysis_ms"),
             "retrieval_ms": ov.get("retrieval_ms"),
             "decision_ms": ov.get("decision_ms"),
             "monitoring_ms": ov.get("monitoring_ms"),
+            "post_llm_ms": ov.get("post_llm_ms"),
             "knowledge_update_ms": ov.get("knowledge_update_ms"),
             "pipeline_overhead_ms": ov.get("pipeline_overhead_ms"),
             "end_to_end_ms": ov.get("end_to_end_ms"),
@@ -1184,6 +1752,7 @@ def load_config_file(path: str) -> RunnerConfig:
         device_inventory_file=data.get("device_inventory_file"),
         planning=data.get("planning") or {},
         agent=data.get("agent") or {},
+        agents=data.get("agents") or {},
         plan_max_parallelism=int(data.get("plan_max_parallelism") or 8),
         plan_min_saving_ms=(float(data["plan_min_saving_ms"])
                             if data.get("plan_min_saving_ms") is not None else None),

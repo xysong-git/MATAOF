@@ -146,7 +146,8 @@ def _horizontal(frames: list, sort_by_time: bool, descending: bool,
         df = pd.concat(frames, axis=1, sort=False) if frames else pd.DataFrame()
         if df.columns.duplicated().any():
             raise MergeError("横向合并后出现重复列")
-        return df
+        # 多段 concat 会产生逐段块；整理成连续块，避免下游插入列时碎片化告警。
+        return df.copy()
     if len(with_time) != len(frames):
         raise MergeError("横向合并的子结果 Time 列不一致（部分缺失）")
     indexed = []
@@ -155,6 +156,10 @@ def _horizontal(frames: list, sort_by_time: bool, descending: bool,
             raise MergeError("横向合并的子结果内部 Time 重复")
         indexed.append(f.set_index(_TIME))
     df = pd.concat(indexed, axis=1, join="outer", sort=False)
+    # 各段 Time 索引通常不同，concat 会留下逐列块；设备数 >100 时
+    # reset_index 插入 Time 列会触发 pandas PerformanceWarning（q12 宽通配场景）。
+    # 先 copy 合并为连续块，既消除告警，也避免后续按列访问的低效。
+    df = df.copy()
     df.index.name = _TIME
     df = df.reset_index()
     if df.columns.duplicated().any():

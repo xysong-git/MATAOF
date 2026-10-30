@@ -117,6 +117,12 @@ Strategy + Execution Metrics + Execution Result + Timestamp）：
 - **update 增强**（`llm_analysis` 节）：
   - `experience_note`：本次执行经验的自然语言总结（单次观察不表述为规律），
     随记录存入知识库的 `llm_note` 字段——与事实字段隔离的 LLM 生成元数据；
+- **B 路径（LLM 常驻）**：`agents.llm_shared=true` 时 KM 经验总结按查询形状
+  收口——`experience_key`（同形状特征 + 策略 + 数据规模，不含精确 time_span）
+  首次命中时调用 1 次 LLM，结果缓存在进程内并随每条记录存为 `llm_note`；
+  同形状后续执行复用（`note_reused=true`，`llm_ms=0`），不再逐执行调用，
+  也不再与监控解读合并。检索摘要保持关闭（`llm_summary=False`），检索仍只
+  消费确定性结构化记录；
 - **确定性兜底**：LLM 未启用/失败/输出非法 → `available=false` + notes；
   检索结果与入库记录完全不变（失败时不写入任何 LLM 元数据）；
 - **非确定性说明**：`llm_analysis`/`llm_note` 受模型随机性影响；匹配、
@@ -130,10 +136,44 @@ Strategy + Execution Metrics + Execution Result + Timestamp）：
 - 上游（三个 Agent）：query_analysis + decision + monitoring + 上下文 + 时间戳 →
   `km.update(...)`；
 - 下游（Optimization Decision Agent）：`km.retrieve(...)["matched_records_for_decision"]`
-  → `decide({"historical_records": ...})`（端到端已由测试验证）；
+  → `decide({"historical_records": ...})`（端到端已由测试验证）；闭环模式下若初始
+  证据为空，决策 Agent 经 AgentBus 发送 `recall` 请求（更宽 top-K），本 Agent
+  按请求的 `max_records` 再检索一次；
 - 历史只是证据，不是规则：决策 Agent 会再次按相似度/时效加权，低相似记录不引用。
 
-## 7. 验证方式
+## 8. Agent 运行时模式（可选，默认关闭）
+
+`retrieve()` 保留为固定 top-K 入口；`run_retrieve()` 把检索规模交给观察决定：
+
+```
+Act(retrieve_round, K)
+  ├─ 已列出强匹配 ≥ min_strong → Finish("sufficient")
+  ├─ total_matched = 0 → Finish("no_match")
+  ├─ 无截断（全部匹配已列出）→ Finish("exhausted")
+  ├─ 轮数 ≥ max_rounds → Finish("max_rounds")
+  ├─ K 已达 cap → Finish("cap")
+  └─ 强证据不足且仍有未展开记录 → K = min(cap, K×expand_factor) → 再检索
+```
+
+- **充分性按已列出证据判定**：只统计实际返回给决策 Agent 的 `strong_match`；
+  全局强匹配很多但 top-K 截断时不会误判充分。
+- **有界**：`max_rounds`（1~4）、`max_records_cap`、`deadline_ms`。
+- **LLM 只解读一次**：每轮 `llm_summary=False`，终止后如需解读才调用
+  `llm_summarize`；无匹配/未启用/关闭时记录 `llm_skip_reason`。
+- **只读**：检索不修改 append-only 存储；入库仍由 `update()` 负责。
+- **失败诚实兜底**：`retrieval_ok=false`、`match_counts` 全 `null`、证据列表为空，
+  不把检索失败表述为"0 条匹配"。
+- **配置**：`agents.knowledge_memory`（`enabled`、`min_strong`、`max_rounds`、
+  `expand_factor`、`max_records_cap`、`deadline_ms`）。
+- **输出**：`{"retrieval": <原输出>, "agent": <运行元数据>}`；元数据含
+  `rounds`、`topk_rounds`、`retrieval_termination`、`initial/final_max_records`。
+- **总线端点**：主链路以 `knowledge_memory` 注册，支持 `retrieve`（固定 top-K）、
+  `recall`（决策 Agent 补充证据，top-K 由消息指定）与 `remember`
+  （`update()` 入库）；消息与错误写入 `trace["bus"]`。
+
+## 9. 验证方式
 
 - 单元测试：`pytest tests/test_knowledge_memory_agent.py`（17 例，含端到端闭环）；
-- 全量回归：`pytest tests/`（106 例）。
+  运行时闭环：`pytest tests/test_km_agent_loop.py`（扩 K 条件、四类终止、
+  LLM 单次调用、检索失败兜底、只读性）；
+- 全量回归：`pytest tests/`（476 例通过 + 1 跳过）。

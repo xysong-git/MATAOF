@@ -14,9 +14,47 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Optional
 
 from mataof.similarity import compact_features
+
+
+def experience_key(feedback_input: dict) -> str:
+    """经验总结的形状键：同查询形状 + 策略 + 数据规模。
+
+    与知识记录签名（`signature_of`）的区别：不包含精确 time_span
+    （同形状允许 10% 时间跨度波动，见 similarity._SHAPE_EXACT_PATHS），
+    因此同一形状下的大量查询共享一条经验总结，而不是逐执行调用 LLM。
+    """
+    inp = feedback_input if isinstance(feedback_input, dict) else {}
+    analysis = inp.get("query_analysis")
+    analysis = analysis if isinstance(analysis, dict) else {}
+    qf = compact_features(analysis) if analysis.get("query_features") else {}
+    time_feat = qf.get("time") or {}
+    decision = inp.get("decision")
+    decision = decision if isinstance(decision, dict) else {}
+    selected = decision.get("selected_strategy")
+    selected = selected if isinstance(selected, dict) else {}
+    db_state = inp.get("database_state")
+    db_state = db_state if isinstance(db_state, dict) else {}
+    static = {
+        "query_type": qf.get("query_type"),
+        "time": {
+            "has_time_filter": time_feat.get("has_time_filter"),
+            "range_level": time_feat.get("range_level"),
+        },
+        "device": qf.get("device"),
+        "filter": qf.get("filter"),
+        "aggregation": qf.get("aggregation"),
+        "measurements": qf.get("measurements"),
+        "strategy_id": str(selected.get("strategy_id") or ""),
+        "data_scale_level": db_state.get("data_scale_level"),
+    }
+    canonical = json.dumps(static, ensure_ascii=False, sort_keys=True,
+                           separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def parse_strategy_id(strategy_id: str) -> dict:

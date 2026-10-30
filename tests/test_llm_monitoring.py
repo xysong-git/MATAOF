@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mataof.agents.execution_monitoring import monitor  # noqa: E402
 from mataof.agents.execution_monitoring.llm_enhance import (  # noqa: E402
+    _fact_numbers,
+    build_post_execution_llm,
     number_consistency_check,
 )
 from mataof.runner import PipelineRunner, RunnerConfig  # noqa: E402
@@ -84,6 +86,36 @@ def test_llm_analysis_filled():
     # 事实字段不受影响
     assert r["metrics"]["response_time_ms"] == 12.3
     assert r["performance_assessment"] == "improved"
+
+
+def test_anomaly_numbers_from_given_data_are_allowed():
+    """异常解读复述 anomalies 里的 observed/reference/倍数属于合法事实。"""
+    out = {
+        "execution_status": "success",
+        "metrics": {"response_time_ms": 61.23},
+        "baseline_comparison": {},
+        "performance_change": [],
+        "performance_assessment": "degraded",
+        "anomalies": [{
+            "type": "historical_deviation", "observed": 61.23,
+            "reference": 16.39,
+            "description": "延迟 61.23 ms 相对历史典型值 16.39 ms 偏离超过 2.0×",
+        }],
+        "feedback": {"confidence": 0.6},
+    }
+    facts = _fact_numbers(out)
+    assert number_consistency_check(
+        "响应时间61.23ms，相对历史典型值16.39ms偏离超过2.0×", facts) is True
+    assert number_consistency_check("偏移超过3.0×", facts) is False
+    resp = json.dumps({
+        "performance_summary": "执行成功，响应时间61.23ms。",
+        "anomaly_summary": "响应时间61.23ms，相对历史典型值16.39ms偏离超过2.0×，同时发生。",
+    }, ensure_ascii=False)
+    section = build_post_execution_llm(
+        FakeLLM(response=resp), {"strategy_id": "s"}, out,
+        include_experience_note=False)
+    assert section["anomaly_summary"] is not None
+    assert not any("疑似编造" in n for n in section["notes"])
 
 
 def test_fabricated_numbers_rejected():

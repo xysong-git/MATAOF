@@ -39,6 +39,9 @@
 - 扫描相关（扫描估计——仅来自数据库统计信息；定性结构信号）
 - 优化相关性候选陈述（供决策 Agent 参考，不直接选择策略）
 - `unknown_features` 与 `analysis_confidence`
+- **可选运行时闭环**（`agents.query_analysis`，默认关闭）：确定性分析为固定第一步，
+  仅在解析失败/类型 unknown/低置信度/tag-attribute 歧义等证据缺口出现时调用 LLM
+  标注；LLM 失败或不必要时保留确定性结果，并记录跳过原因
 
 详细规格见 [docs/query-analysis-agent.md](docs/query-analysis-agent.md)。
 
@@ -57,8 +60,10 @@
 - **上下文感知**：仅凭 SQL 文本不决策（缺少 query_analysis → invalid_input）
 - **历史知识是证据而非规则**：相似度（查询特征/数据库状态/系统状态）达标才引用，按相似度加权
 - **风险控制**：证据不足时优先安全 baseline/fallback；高风险策略需更强证据
-- **可选的闭环模式**（`agent.enabled=true`）：通过运行时执行决策、观察监控反馈，
+- **可选的闭环模式**（`agents.optimization_decision.enabled=true`，旧 `agent.enabled`
+  仍兼容）：通过运行时执行决策、观察监控反馈，
   实测 degraded/failed 时排除该计划并重规划，直到达标/无替代/预算耗尽；
+  初始历史证据为空时经 AgentBus 向知识记忆 Agent 请求一次更宽检索；
   逐步尝试与终止原因写入 trace（默认关闭，确定性单次决策路径不变）
 - 输出结构化策略（strategy_id + strategy_parameters + execution_plan）、逐维度
   reason/confidence、实际使用的 evidence、整体置信度与 decision_status
@@ -78,6 +83,9 @@
 - 策略效果判断（improved / degraded / unchanged / failed / insufficient_evidence，
   基于实测；单次执行不推断永久有效）
 - 异常识别（超时/失败/延迟飙升/资源异常/偏离历史表现）——只记录，不改策略
+- **可选运行时闭环**（`agents.execution_monitoring`，默认关闭）：事实流水线
+  归一化 → 按需比较 → 评估 → 异常识别；无 baseline/无有效指标时跳过比较并
+  记录原因，LLM 仅在真实异常或 failed/timeout 时解读（degraded 由确定性链路记录）
 
 详细规格见 [docs/execution-monitoring-agent.md](docs/execution-monitoring-agent.md)。
 
@@ -94,6 +102,9 @@
   非 SQL 文本匹配）；成功策略模式提取（≥3 次且成功率 ≥0.6）；失败经验保留汇总
 - 反馈更新：成功/失败经验标记、累计策略评价、priority change（单次异常不否定历史）
 - 检索结果可直接作为决策 Agent 的 `historical_records` 输入（端到端已验证）
+- **可选运行时闭环**（`agents.knowledge_memory`，默认关闭）：自适应 top-K——
+  已列出的强匹配不足且仍有未展开记录时扩大检索规模，受轮数/上限/截止时间约束；
+  LLM 解读在终止后只调用一次，检索失败输出 null 证据而非伪造 0 匹配
 
 详细规格见 [docs/knowledge-memory-agent.md](docs/knowledge-memory-agent.md)。
 
@@ -120,8 +131,15 @@ python3 -m pytest tests/ -v
 ```
 
 正式运行手册（配置文件、执行层对接、追踪输出）见 [docs/cli.md](docs/cli.md)；
-**决策闭环（执行→观察→退化重规划）的启用方式与消融配置见
-[docs/agent-runtime.md](docs/agent-runtime.md)**；
+**四 Agent 运行时（工具/观察/终止语义）、AgentBus 主链路消息流、`agents` 配置与
+消融见 [docs/agent-runtime.md](docs/agent-runtime.md)**；LLM 模式下
+`agents.llm_shared=true` 让同一 LLM 按各 Agent 的 `llm_policy` 常驻共享
+（OD 决策 1 次 + QA/EM 可选补充 + KM 经验按查询形状只生成一次；稳态正常
+查询 1 次、单条最多 3 次）；
+**2×2 对照**（控制流 pipeline/agent × LLM off/on）由
+`scripts/run_experiment.sh --mode pipeline|pipeline-llm|agent|llm` 切换，
+每轮自动输出 `scripts/agent_profile.py` 行为剖面（控制流/触发率/动作序列/
+总线 intent/成本），用于回答“Agent 是否真的在行动”；
 **三规模查询集（query/ 目录）的一轮实验执行说明见 [docs/run-experiment.md](docs/run-experiment.md)**；
 各 Agent 的输入/输出契约见 docs/ 下的规格文档。
 
@@ -174,7 +192,7 @@ MATAOF/
 │   └── executors/                    # 执行层抽象：Null / File（回放）/ IoTDB（真实执行）
 ├── pyproject.toml                    # 可安装（console script: mataof）
 ├── config.example.json               # 配置文件模板
-├── tests/                            # 386 例单元测试 + 真实 IoTDB 语料鲁棒性验证
+├── tests/                            # 476 例单元测试 + 1 跳过 + 真实 IoTDB 语料鲁棒性验证
 ├── examples/
 │   ├── analyze_example.py
 │   ├── decide_example.py
@@ -184,7 +202,7 @@ MATAOF/
     ├── cli.md                        # 运行手册（正式入口）
     ├── query-analysis-agent.md       # Query Analysis Agent 规格说明
     ├── optimization-decision-agent.md # Optimization Decision Agent 规格说明
-    ├── agent-runtime.md              # Agent 运行时、决策闭环与消融配置
+    ├── agent-runtime.md              # 四 Agent 运行时、闭环语义、配置与消融
     ├── execution-monitoring-agent.md  # Execution Monitoring Agent 规格说明
     └── knowledge-memory-agent.md      # Knowledge Memory Agent 规格说明
 ```

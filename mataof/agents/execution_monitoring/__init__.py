@@ -20,7 +20,10 @@ Actual Execution Result 的关联，生成结构化执行反馈。
 from mataof.agents.execution_monitoring.agent import (
     ExecutionMonitoringAgent,
     default_agent,
+    llm_interpretation_needed,
     monitor,
+    run_agent,
 )
 
-__all__ = ["ExecutionMonitoringAgent", "monitor", "default_agent"]
+__all__ = ["ExecutionMonitoringAgent", "monitor", "run_agent", "default_agent",
+           "llm_interpretation_needed"]

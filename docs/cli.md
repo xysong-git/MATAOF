@@ -54,17 +54,84 @@ baseline 延迟（样本 3）: avg 6.46ms | P50 6.34ms | P95 7.4ms | P99 7.4ms
   "baseline_strategy": null,                    // 不填 → 内置安全 baseline
   "thresholds": {},                             // 监控异常阈值覆盖
   "reference_time": null,                       // 历史时效衰减参考点（epoch 毫秒）
-  "agent": {                                    // 决策闭环（默认关闭）
-    "enabled": false,
-    "max_attempts": 2,
-    "deadline_ms": 30000,
-    "replan_on": ["degraded", "failed"]
+  "agents": {                                   // 四 Agent 运行时（模板默认关闭）
+    "enabled": false,                           // 全局默认；单个 Agent 可覆盖
+    "llm_shared": false,                        // true：同一 LLM 按策略共享给 QA/EM/KM（KM 按形状）
+    "control": "agent",                         // agent：观察驱动闭环；pipeline：固定流水线
+    "query_analysis": {
+      "llm_policy": "on_gap",                   // on_gap | always | never
+      "confidence_threshold": 0.5,
+      "deadline_ms": 10000
+    },
+    "optimization_decision": {                  // 旧键 "agent" 仍兼容（仅启用 OD）
+      "max_attempts": 2,
+      "deadline_ms": 30000,
+      "replan_on": ["degraded", "failed"],
+      "recall_on_empty_evidence": true,         // 初始证据为空 → 经总线请求补充检索
+      "recall_max_records": null                // null = max(200, 首轮×2)
+    },
+    "execution_monitoring": {
+      "llm_policy": "on_anomaly",               // on_anomaly | on_anomaly_or_degraded | always | never
+      "deadline_ms": 5000
+    },
+    "knowledge_memory": {
+      "min_strong": 1,                          // 已列出强匹配达到该值即充分
+      "max_rounds": 2,                          // 检索轮数上限（含首轮）
+      "expand_factor": 2,                       // 每轮 top-K 扩大倍数
+      "deadline_ms": 2000
+    }
   }
 }
 ```
 
-启用 `agent.enabled` 后，Optimization Decision Agent 会执行所选计划并观察监控反馈；
-实测 degraded/failed 时排除该计划重规划。详细语义、trace 字段与消融方式见
+`agents.enabled` 是全局默认值，某个 Agent 自己声明 `enabled` 时优先生效，便于
+单 Agent 消融。旧配置 `agent` 等价于 `agents.optimization_decision`，两者合并时
+新键优先。四个 Agent 默认关闭，关闭时主链路与旧版本完全一致。
+
+`agents.control` 切换控制流（2×2 对照的“控制流”维度）：
+- `agent`（默认）：观察驱动闭环——OD 在 degraded/failed 后 replan、空证据时
+  经总线 recall，KM 可按观察扩 top-K；
+- `pipeline`：固定流水线——单次决策/执行、固定 top-K 检索，不做
+  replan/recall/自适应扩 K；QA/EM/KM 组件与 LLM 调用点保持不变。
+
+`agents.llm_shared` 控制 LLM 在 Agent 间的共享（默认 `false`，保持旧语义）：
+- `false`：`decision_mode="llm_primary"` 下 LLM 只用于 OD 决策（1 次/查询）；
+  非 primary 模式仍按旧路径把 LLM 用于解读增强；
+- `true`（LLM 常驻）：同一 LLM 客户端按各 Agent 的 `llm_policy` 共享——
+  QA 仅在缺口/`always` 时调用；执行后监控解读由 EM 的 `llm_policy=on_anomaly`
+  （默认）门控，仅真实异常或 failed/timeout 时调用；KM 经验总结按查询形状
+  收口（`experience_key`：同形状 + 策略 + 数据规模，不含精确 time_span），
+  同一形状首次执行调用 1 次、后续复用。主实验配置（OD Agent +
+  `llm_primary`）的调用预算：每条查询必有 1 次 OD 决策调用；QA 触发 +1；
+  异常/失败触发监控解读 +1；新形状首条 KM 经验 +1。**稳态正常查询 1 次、
+  单条最多 3 次**。`on_anomaly_or_degraded` 保留为消融策略。
+
+`scripts/gen_configs.py` 生成控制流 × LLM 的 2×2 矩阵（各模式独立知识库，
+避免一种配置的执行记录污染另一种的历史证据）：
+- `config.*.pipeline.json`（P0）：`enabled=true`、`control="pipeline"`、无 LLM；
+- `config.*.pipeline-llm.json`（P1）：`enabled=true`、`control="pipeline"`、
+  `llm_shared=true`；
+- `config.*.json`（A0）：`enabled=true`、`control="agent"`、无 LLM；
+- `config.*.llm.json`（A1）：`enabled=true`、`control="agent"`、
+  `llm_shared=true`；
+- `config.*.fixed.json`：`enabled=false`（固定策略对照，跳过决策/检索）；
+- `config.local-llm.json`：dbs 规模的 A1 本地配置。
+启用后：
+
+- Query Analysis：确定性分析后按 `llm_policy` 决定是否调用 LLM 标注
+  （`on_gap` 默认，仅证据缺口出现时调用）；
+- Optimization Decision：执行所选计划并观察监控反馈，degraded/failed 时排除该计划
+  重规划；初始历史证据为空时向 Knowledge Memory 请求一次更宽检索；
+- Execution Monitoring：无 baseline/无指标时跳过比较并记录原因；`llm_shared=true`
+  时执行后解读由 Runner 统一发起（默认仅异常/失败触发）；
+- Knowledge Memory：强证据不足且仍有未展开记录时自适应扩大 top-K；经验总结
+  按查询形状生成（同一形状只调用一次 LLM，后续执行复用），不再逐执行调用。
+
+任一 Agent 启用时，Runner 为每条查询构建 AgentBus；QA/KM/EM 以端点注册，
+检索、补充证据、监控与入库都经消息路由（端点内部按配置选择 Agent 或确定性
+实现）。每步行动、观察、终止原因写入 `trace["agents"]`，消息往返写入
+`trace["bus"]`；run_log 增加 `agents_enabled`、`agent_steps_total`、
+`bus_messages`、`bus_errors`。详细语义、trace 字段与消融方式见
 [docs/agent-runtime.md](agent-runtime.md)。
 
 ## 4. 执行层对接（executor）
@@ -202,7 +269,8 @@ runner.stats()                                           # 知识库统计
   execution（原始事实）→ monitoring → knowledge_update；
 - `run_log.jsonl`：追加的汇总行（query_id、query_type、strategy_id、decision_status、
   execution_status、performance_assessment、anomaly_count、response_time_ms、
-  knowledge_confidence、stored），可直接用于实验统计。
+  knowledge_confidence、stored；启用 Agent 时另有 agents_enabled、
+  agent_steps_total、bus_messages、bus_errors），可直接用于实验统计。
 
 ## 7. 运行语义（安全路径）
 
@@ -214,5 +282,5 @@ runner.stats()                                           # 知识库统计
 ## 8. 验证
 
 ```bash
-python3 -m pytest tests/ -v     # 117 例（含 runner/CLI 入口测试）
+python3 -m pytest tests/ -v     # 476 例通过 + 1 跳过（含 runner/CLI 入口测试）
 ```

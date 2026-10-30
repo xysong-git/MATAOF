@@ -78,6 +78,11 @@ _AGENT_DEFAULTS = {
     "max_attempts": 2,
     "deadline_ms": 30_000.0,
     "replan_on": ("degraded", "failed"),
+    # 初始历史证据为空时，是否允许 Agent 通过消息总线向知识记忆 Agent
+    # 请求一次更宽的补充检索（需要调用方注入 recall 工具）。
+    "recall_on_empty_evidence": True,
+    # 补充检索的 top-K；None → 由 runner 按首轮 K 的 2 倍（至少 200）计算。
+    "recall_max_records": None,
 }
 
 
@@ -100,6 +105,11 @@ def _normalize_agent_config(raw: Any) -> dict:
         values = tuple(str(x) for x in raw["replan_on"] if x is not None)
         if values:
             cfg["replan_on"] = values
+    if "recall_on_empty_evidence" in raw:
+        cfg["recall_on_empty_evidence"] = bool(raw["recall_on_empty_evidence"])
+    value = raw.get("recall_max_records")
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        cfg["recall_max_records"] = max(1, min(5000, value))
     return cfg
 
 
@@ -444,9 +454,24 @@ class OptimizationDecisionAgent:
         output["notes"] = notes
 
         # ---- LLM 语义增强（只进 llm_analysis 节；失败不影响确定性决策）----
-        # llm_decide 模式下跳过解读调用（LLM 仅用于决策本身，每条查询 1 次调用）
-        output["llm_analysis"] = build_llm_analysis(
-            None if llm_decide else llm, decision_input, output, ctx.candidates)
+        # llm_decide 模式下跳过 OD 自己的解读调用（LLM 仅用于决策本身；
+        # 监控/KM 的 LLM 调用由 Runner 按 llm_shared 与各 Agent 策略统一调度）。
+        # 但仍要在 trace 里显式标记 LLM 参与了决策，避免 available=false 被误读为
+        # “LLM 未参与”。
+        if llm_decide:
+            output["llm_analysis"] = {
+                "available": False,
+                "semantic_reason": None,
+                "preferences": {},
+                "notes": ["llm_primary：LLM 已参与决策选择（见 llm_selected_dimensions），"
+                          "按设计不额外调用语义解读"],
+                "decision_mode": "llm_primary",
+                "llm_used_for_decision": llm is not None,
+                "llm_selected_dimensions": sorted(llm_chosen),
+            }
+        else:
+            output["llm_analysis"] = build_llm_analysis(
+                llm, decision_input, output, ctx.candidates)
         return output
 
     # ------------------------------------------------------------------
@@ -454,6 +479,7 @@ class OptimizationDecisionAgent:
     # ------------------------------------------------------------------
     def run(self, decision_input: dict, *,
             execute: Optional[Callable[[dict], dict]] = None,
+            recall: Optional[Callable[[], dict]] = None,
             agent_config: Optional[dict] = None,
             llm: Optional[object] = None,
             llm_decide: bool = False) -> dict:
@@ -466,6 +492,11 @@ class OptimizationDecisionAgent:
              "execution_ms": float, "monitoring_ms": float}
         典型实现是 runner 的"执行 + 监控"组合（执行器 + 监控 Agent）。
 
+        recall：可选的补充证据工具，签名 `recall() -> dict`，返回
+            {"ok": bool, "historical_records": [...], "error": str|None}。
+        当初始 `historical_records` 为空时，Agent 先调用它向知识记忆 Agent
+        请求一次更宽检索；失败/仍为空则照常决策（不伪造证据）。
+
         闭环语义（有界）：
         1. 确定性/LLM 决策选出一个可执行计划；
         2. 通过 execute 工具执行并观察监控反馈；
@@ -477,7 +508,7 @@ class OptimizationDecisionAgent:
         """
         cfg = _normalize_agent_config(agent_config)
         state = {
-            "input": decision_input if isinstance(decision_input, dict) else {},
+            "input": dict(decision_input) if isinstance(decision_input, dict) else {},
             "decision": None,
             "pending": None,
             "attempts": [],
@@ -488,6 +519,8 @@ class OptimizationDecisionAgent:
             "cfg": cfg,
             "llm": llm,
             "llm_decide": bool(llm_decide),
+            "recall": {},
+            "recall_attempted": False,
         }
 
         tools = ToolRegistry()
@@ -499,11 +532,22 @@ class OptimizationDecisionAgent:
                             "properties": {"decision": {"type": "object"}}},
                 side_effect="execute", cost="high",
             )
+        if recall is not None:
+            tools.register(
+                "request_evidence", recall,
+                description="向知识记忆 Agent 请求补充历史证据（只读）",
+                parameters={"required": [], "properties": {}},
+                side_effect="read", cost="low",
+            )
 
         runtime = AgentRuntime(self.name, tools, self._agent_policy)
-        # 每次尝试最多消耗 2 步（执行 + 观察决策）；+2 用于首次决策与收尾。
+        # 每次尝试最多消耗 2 步（执行 + 观察决策）；+2 用于首次决策与收尾；
+        # 注入 recall 时再多 1 步（补充证据 + 观察）。
+        recall_enabled = bool(recall is not None
+                              and cfg.get("recall_on_empty_evidence"))
         goal = Goal(name="optimize_query",
-                    max_steps=2 * int(cfg["max_attempts"]) + 2,
+                    max_steps=2 * int(cfg["max_attempts"]) + 2
+                    + (1 if recall_enabled else 0),
                     deadline_ms=cfg["deadline_ms"])
         run_result = runtime.run(goal, AgentContext(data=state))
 
@@ -525,18 +569,22 @@ class OptimizationDecisionAgent:
         cfg = state["cfg"]
         obs = ctx.last_observation
 
-        # ---- 第一步：先做决策（不执行任何外部动作）----
+        # ---- 第一步：证据为空时先向知识记忆 Agent 请求补充 ----
         if obs is None:
-            decision, ms = self._timed_decide(
-                state["input"], state["llm"], state["llm_decide"])
-            state["timings"]["decision_ms"] += ms
-            state["decision"] = decision
-            if "execute_decision" not in tools:
-                return Abort(result=self._agent_payload(state),
-                             reason="no_executor")
-            state["pending"] = decision
-            return Act("execute_decision", {"decision": decision},
-                       reason="执行当前决策选中的计划")
+            if ("request_evidence" in tools
+                    and cfg.get("recall_on_empty_evidence")
+                    and not state["recall_attempted"]
+                    and not (state["input"].get("historical_records") or [])):
+                state["recall_attempted"] = True
+                return Act(
+                    "request_evidence", {},
+                    reason="初始历史证据为空，向知识记忆 Agent 请求补充检索")
+            return self._begin_decision(state, tools)
+
+        # ---- 补充证据的观察：合并记录后照常决策 ----
+        if obs.tool == "request_evidence":
+            self._apply_recall(state, obs)
+            return self._begin_decision(state, tools)
 
         # ---- 观察上一轮执行结果 ----
         decision = state.get("pending") or state.get("decision")
@@ -559,6 +607,52 @@ class OptimizationDecisionAgent:
         state["attempts"].append(attempt)
 
         return self._decide_next(state, cfg, attempt)
+
+    def _begin_decision(self, state: dict, tools: ToolRegistry):
+        """执行首次/补充证据后的决策，并把选中的计划交给执行工具。"""
+        decision, ms = self._timed_decide(
+            state["input"], state["llm"], state["llm_decide"])
+        state["timings"]["decision_ms"] += ms
+        state["decision"] = decision
+        if "execute_decision" not in tools:
+            return Abort(result=self._agent_payload(state),
+                         reason="no_executor")
+        state["pending"] = decision
+        return Act("execute_decision", {"decision": decision},
+                   reason="执行当前决策选中的计划")
+
+    @staticmethod
+    def _apply_recall(state: dict, obs) -> None:
+        """把补充检索观察合并进决策输入；失败只记录，不伪造证据。"""
+        recall = {"attempted": True, "ok": False, "records_added": 0,
+                  "error": None}
+        value = obs.value if obs.ok and isinstance(obs.value, dict) else None
+        # 工具调用成功不代表检索成功：调用方可能在 payload 里报告 ok=False
+        if value is not None and value.get("ok", True) is not False:
+            records = value.get("historical_records") or []
+            existing = list(state["input"].get("historical_records") or [])
+            seen = {str(r.get("record_id")) for r in existing
+                    if isinstance(r, dict) and r.get("record_id") is not None}
+            added = []
+            for rec in records:
+                if not isinstance(rec, dict):
+                    continue
+                rid = rec.get("record_id")
+                if rid is not None and str(rid) in seen:
+                    continue
+                added.append(rec)
+                if rid is not None:
+                    seen.add(str(rid))
+            state["input"]["historical_records"] = existing + added
+            recall.update({"ok": True, "records_added": len(added)})
+            if isinstance(value.get("retrieval"), dict):
+                recall["retrieval"] = value["retrieval"]
+            if isinstance(value.get("agent"), dict):
+                recall["agent"] = value["agent"]
+        else:
+            error = (value or {}).get("error") or obs.error
+            recall["error"] = error or "补充检索未返回结果"
+        state["recall"] = recall
 
     def _decide_next(self, state: dict, cfg: dict, attempt: dict):
         """退化为失败/退化且仍有预算 → 排除该计划重规划；否则终止。"""
@@ -627,6 +721,8 @@ class OptimizationDecisionAgent:
             "_monitoring": monitoring,
             "_reference": value.get("monitoring_reference"),
             "_monitoring_input": value.get("monitoring_input"),
+            # 执行工具可携带监控 Agent 的元数据（runner 的 monitor 路径）
+            "_monitoring_agent": value.get("agent"),
         }
 
     @staticmethod
@@ -646,6 +742,7 @@ class OptimizationDecisionAgent:
             "_monitoring": None,
             "_reference": None,
             "_monitoring_input": None,
+            "_monitoring_agent": None,
         }
 
     @staticmethod
@@ -660,17 +757,24 @@ class OptimizationDecisionAgent:
             "monitoring": final.get("_monitoring"),
             "monitoring_reference": final.get("_reference"),
             "monitoring_input": final.get("_monitoring_input"),
+            # 最后一次尝试的监控 Agent 元数据（启用时；否则 None）
+            "monitoring_agent": final.get("_monitoring_agent"),
             "agent": {
                 "enabled": True,
                 "runtime": "mataof.runtime",
                 "policy": "deterministic_replan",
                 "max_attempts": int(cfg.get("max_attempts") or 2),
                 "replan_on": list(cfg.get("replan_on") or ()),
+                # 初始决策是否由 LLM 参与（重规划是确定性的；最终 decision
+                # 可能来自重规划，单独记录避免 run_log 误判“全程未用 LLM”）
+                "llm_used_for_decision": bool(state.get("llm_decide")),
                 "attempts": [_public_attempt(a) for a in attempts],
                 "timings": {k: round(float(v), 3)
                             for k, v in (state.get("timings") or {}).items()},
                 "final_monitoring_ms": round(
                     float(state.get("final_monitoring_ms") or 0.0), 3),
+                # 通过消息总线向知识记忆 Agent 请求补充证据的观察
+                "evidence_recall": dict(state.get("recall") or {}),
             },
         }
 
@@ -852,10 +956,11 @@ def decide(decision_input: dict, llm: Optional[object] = None,
 
 
 def run_agent(decision_input: dict, *, execute: Callable[[dict], dict],
+              recall: Optional[Callable[[], dict]] = None,
               agent_config: Optional[dict] = None,
               llm: Optional[object] = None,
               llm_decide: bool = False) -> dict:
     """Optimization Decision Agent 的闭环入口（带执行/观察/重规划）。"""
-    return default_agent.run(decision_input, execute=execute,
+    return default_agent.run(decision_input, execute=execute, recall=recall,
                              agent_config=agent_config,
                              llm=llm, llm_decide=llm_decide)

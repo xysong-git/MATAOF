@@ -37,10 +37,9 @@ def percent_change(cur: Optional[float], base: Optional[float]) -> Optional[floa
     return round((cur - base) / base * 100.0, 2)
 
 
-def compare_with_baseline(cur_metrics: dict, baseline_raw: Optional[dict],
-                          thresholds: dict, notes: list[str]) -> tuple[dict, list[str]]:
-    """返回 (baseline_comparison 节, performance_change 标签列表)。"""
-    comparison = {
+def empty_comparison() -> dict:
+    """未进行比较时的空 comparison 节（available=false，不含任何推算值）。"""
+    return {
         "available": False,
         "latency_change_percent": None,
         "p95_change_percent": None,
@@ -50,6 +49,12 @@ def compare_with_baseline(cur_metrics: dict, baseline_raw: Optional[dict],
         "memory_change_percent": None,
         "io_change_percent": None,
     }
+
+
+def compare_with_baseline(cur_metrics: dict, baseline_raw: Optional[dict],
+                          thresholds: dict, notes: list[str]) -> tuple[dict, list[str]]:
+    """返回 (baseline_comparison 节, performance_change 标签列表)。"""
+    comparison = empty_comparison()
     if not isinstance(baseline_raw, dict) or not baseline_raw:
         notes.append("未提供 baseline 执行结果，不生成比较结果")
         return comparison, []

@@ -184,8 +184,37 @@
 客户端由共享层构造（`mataof/llm.py`，OpenAI 兼容 API / 本地 HTTP 服务双后端，
 配置见 docs/cli.md 的 llm 节）。
 
-## 7. 验证方式
+## 7. Agent 运行时模式（可选，默认关闭）
+
+`analyze()` 仍是纯确定性入口；`run_agent()` / `agent.run()` 把它包进一个有界
+控制环：
+
+```
+Act(analyze_deterministic) → Observation(analysis, gap_signals)
+  ├─ 无缺口 / llm 不可用 / llm_policy=never → Finish("analyzed")
+  └─ 有缺口且策略允许 → Act(llm_annotate) → Finish("llm_annotated")
+```
+
+- **固定第一步**：确定性解析、特征、置信度与特征向量始终先执行；Agent 不会跳过
+  事实提取直接问 LLM。
+- **缺口信号**（`agent.gap_signals`）：`parse_error`、`query_type_unknown`、
+  `low_confidence`（低于 `confidence_threshold`）、`ambiguous_filter_types`
+  （tag/attribute 歧义）。
+- **策略**：`llm_policy ∈ {on_gap, always, never}`，默认 `on_gap`。
+- **终止原因**：`analyzed`（无需 LLM）、`llm_annotated`、`llm_failed`
+  （保留确定性结果）、`analysis_failed`（输出保守 unknown 模板）。
+- **配置**：`agents.query_analysis`（`enabled`、`llm_policy`、
+  `confidence_threshold`、`deadline_ms`）；非法值回退默认。
+- **输出**：`{"analysis": <原输出>, "agent": <运行元数据>}`；确定性字段与
+  `analyze()` 逐字段一致，LLM 只影响 `llm_analysis` 节。
+- **总线端点**：主链路以 `query_analysis` 注册，`analyze` 意图的请求只携带
+  `query_id`（查询文本由 Runner 闭包提供），响应返回分析结果与 Agent 元数据；
+  处理器失败时 Runner 回退直接调用，查询继续。
+
+## 8. 验证方式
 
 - 单元测试：`pytest tests/test_query_analysis_agent.py`（37 例，覆盖六类任务与 strict 限制）；
+  运行时闭环：`pytest tests/test_qa_agent_loop.py`（8 例：确定性等价、缺口触发、
+  策略开关、LLM 失败兜底、工具异常观察、配置钳制）；
 - 真实语料鲁棒性：`pytest tests/test_sample_corpus.py`（MAPO 前序工作 5 个数据集、
   2313 条抽样语句：零崩溃、零解析失败，解析失败时优雅降级为 unknown + 置信度 0.1）。

@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# MATAOF 实验运行脚本：三种模式切换
-#   --mode native  纯原生 IoTDB（不走任何 Agent 路径）
-#   --mode agent   Agent 确定性链路（无 LLM）
-#   --mode llm     Agent + 本地 vLLM 推理
+# MATAOF 实验运行脚本：控制流 × LLM 的 2×2 对照 + 固定策略/原生基线
+#   --mode native        纯原生 IoTDB（不走任何 Agent 路径）
+#   --mode pipeline      固定流水线（四 Agent 组件，无 replan/recall），无 LLM（P0）
+#   --mode pipeline-llm  固定流水线 + 共享 LLM（P1）
+#   --mode agent         四 Agent 观察驱动闭环，无 LLM（A0）
+#   --mode llm           四 Agent 观察驱动闭环 + 共享 LLM（A1，主实验）
+#   --mode fixed         固定策略对照（Baseline 2）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,14 +19,18 @@ FILES=""              # 逗号分隔的 q 文件名（如 q1,q4,q7）；空 = �
 PER_FILE_LIMIT=""     # 每个文件取样条数；空 = 全量
 SAMPLE="seq"          # seq | random
 SEED=42
-WORKERS=1             # 查询级并行（B2；LLM 模式建议 4）
+WORKERS=1             # 查询级并行（B2；逐条真实 LLM 推理时可用 4，缓存/无 LLM 保持 1）
 RESULT_MODE="row"     # native 专用：row=逐行（历史口径）/ df=DataFrame 批量（同 agent）
 
 usage() {
   cat <<EOF
-用法: $0 --mode native|agent|llm|fixed [选项]
-  --mode MODE           运行模式：native（纯原生 IoTDB）/ agent（Agent 无 LLM）/
-                        llm（Agent+LLM，异步增强）/ fixed（固定策略对照，Baseline 2）
+用法: $0 --mode native|pipeline|pipeline-llm|agent|llm|fixed [选项]
+  --mode MODE           运行模式：native（纯原生 IoTDB）/
+                        pipeline（固定流水线，无 LLM，P0）/
+                        pipeline-llm（固定流水线 + LLM，P1）/
+                        agent（四 Agent 闭环，无 LLM，A0）/
+                        llm（四 Agent 闭环 + LLM，A1）/
+                        fixed（固定策略对照，Baseline 2）
   --query-dir DIR       只跑指定查询目录（如 query/queries_dbs；设置后忽略 --scales，
                         规模从目录名 queries_<scale> 推导，用于选择配置文件）
   --scales S            规模，逗号分隔（默认 dbs,dbm,dbl）
@@ -31,7 +38,7 @@ usage() {
   --per-file-limit N    每个文件取样条数（默认全量；所有模式都生效）
   --sample seq|random   取样方式（默认 seq）
   --seed N              随机取样种子（默认 42，可复现）
-  --workers N           查询级并行（默认 1；agent/llm/fixed 模式生效）
+  --workers N           查询级并行（默认 1；pipeline/pipeline-llm/agent/llm/fixed 生效）
   --result-mode MODE    native 专用结果消费口径：row（逐行，默认；历史 baseline）
                         或 df（DataFrame 批量，与 agent 计划同口径；输出到
                         results_baseline_df/）
@@ -55,8 +62,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$MODE" in
-  native|agent|llm|fixed) ;;
-  *) echo "缺少 --mode（native/agent/llm/fixed）" >&2; usage; exit 2 ;;
+  native|pipeline|pipeline-llm|agent|llm|fixed) ;;
+  *) echo "缺少 --mode（native/pipeline/pipeline-llm/agent/llm/fixed）" >&2; usage; exit 2 ;;
 esac
 
 case "$RESULT_MODE" in
@@ -64,11 +71,11 @@ case "$RESULT_MODE" in
   *) echo "未知 --result-mode: $RESULT_MODE（仅 row/df）" >&2; exit 2 ;;
 esac
 if [[ "$MODE" != "native" && "$RESULT_MODE" != "row" ]]; then
-  echo "注意: --result-mode 仅 native 模式生效；agent/llm/fixed 固定走计划 df 路径" >&2
+  echo "注意: --result-mode 仅 native 模式生效；pipeline/pipeline-llm/agent/llm/fixed 固定走计划 df 路径" >&2
 fi
 
-# llm 模式预检：vLLM 不可用则直接失败（防止静默退化为 agent 模式污染实验）
-if [[ "$MODE" == "llm" ]]; then
+# LLM 模式预检：vLLM 不可用则直接失败（防止静默退化污染实验）
+if [[ "$MODE" == "llm" || "$MODE" == "pipeline-llm" ]]; then
   if ! curl -s --max-time 3 "$LLM_URL" 2>/dev/null | grep -q '"id"'; then
     echo "错误: LLM 模式要求本地 vLLM 服务可用（$LLM_URL 无响应），请先启动 vLLM" >&2
     exit 3
@@ -130,14 +137,18 @@ if [[ "$MODE" == "native" ]]; then
       --sample "$SAMPLE" --seed "$SEED"
   done
 else
-  # agent/llm/fixed：每规模一次 mataof 调用（多文件并行处理；
+  # pipeline/pipeline-llm/agent/llm/fixed：每规模一次 mataof 调用（多文件并行处理；
   # 异步增强不与逐文件排空互相阻塞，文件间连续执行）
   for qdir in "${qdirs[@]}"; do
     scale=$(basename "$qdir" | sed -n 's/^queries_\(.*\)$/\1/p')
     [[ -n "$scale" ]] || scale=${SCALES%%,*}
-    cfg="config.$scale.json"
-    [[ "$MODE" == "llm" ]] && cfg="config.$scale.llm.json"
-    [[ "$MODE" == "fixed" ]] && cfg="config.$scale.fixed.json"
+    case "$MODE" in
+      pipeline) cfg="config.$scale.pipeline.json" ;;
+      pipeline-llm) cfg="config.$scale.pipeline-llm.json" ;;
+      agent) cfg="config.$scale.json" ;;
+      llm) cfg="config.$scale.llm.json" ;;
+      fixed) cfg="config.$scale.fixed.json" ;;
+    esac
     files_this_scale=()
     while IFS= read -r f; do
       files_this_scale+=("$f")
@@ -157,6 +168,7 @@ fi
 echo "本轮墙钟总用时: $(( $(date +%s) - start ))s"
 
 # 汇总报告
+run_logs=()
 case "$MODE" in
   native)
     BASELINE_DIR="$ROOT/results_baseline"
@@ -164,19 +176,32 @@ case "$MODE" in
     echo "== 原生 baseline 汇总（$RESULT_MODE 口径，客户端墙钟）=="
     python3 "$ROOT/scripts/aggregate_native.py" "$BASELINE_DIR"/*.jsonl
     ;;
+  pipeline)
+    echo "== Pipeline 模式汇总（P0：固定流水线，无 LLM；轮次 $ROUND_ID）=="
+    run_logs=("$ROOT"/results/round_pipeline_{dbs,dbm,dbl}/run_log.jsonl)
+    ;;
+  pipeline-llm)
+    echo "== Pipeline+LLM 模式汇总（P1：固定流水线 + LLM；轮次 $ROUND_ID）=="
+    run_logs=("$ROOT"/results/round_pipeline_llm_{dbs,dbm,dbl}/run_log.jsonl)
+    ;;
   agent)
-    echo "== Agent 模式汇总（轮次 $ROUND_ID）=="
-    python3 "$ROOT/scripts/aggregate_agent.py" --run-id "$ROUND_ID" \
-      "$ROOT"/results/round_{dbs,dbm,dbl}/run_log.jsonl
+    echo "== Agent 模式汇总（A0：四 Agent 闭环，无 LLM；轮次 $ROUND_ID）=="
+    run_logs=("$ROOT"/results/round_agent_{dbs,dbm,dbl}/run_log.jsonl)
     ;;
   llm)
-    echo "== Agent+LLM 模式汇总（轮次 $ROUND_ID）=="
-    python3 "$ROOT/scripts/aggregate_agent.py" --run-id "$ROUND_ID" \
-      "$ROOT"/results/round_{dbs,dbm,dbl}_llm/run_log.jsonl
+    echo "== Agent+LLM 模式汇总（A1：四 Agent 闭环 + LLM；轮次 $ROUND_ID）=="
+    run_logs=("$ROOT"/results/round_{dbs,dbm,dbl}_llm/run_log.jsonl)
     ;;
   fixed)
     echo "== 固定策略（Baseline 2）模式汇总（轮次 $ROUND_ID）=="
-    python3 "$ROOT/scripts/aggregate_agent.py" --run-id "$ROUND_ID" \
-      "$ROOT"/results/round_fixed_{dbs,dbm,dbl}/run_log.jsonl
+    run_logs=("$ROOT"/results/round_fixed_{dbs,dbm,dbl}/run_log.jsonl)
     ;;
 esac
+
+if [[ ${#run_logs[@]} -gt 0 ]]; then
+  python3 "$ROOT/scripts/aggregate_agent.py" --run-id "$ROUND_ID" \
+    "${run_logs[@]}"
+  echo "== Agent 行为剖面（$MODE；轮次 $ROUND_ID）=="
+  python3 "$ROOT/scripts/agent_profile.py" --run-id "$ROUND_ID" \
+    "${run_logs[@]}"
+fi
